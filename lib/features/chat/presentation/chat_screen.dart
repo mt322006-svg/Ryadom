@@ -4,13 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/l10n_ext.dart';
-import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_palette.dart';
+import '../../geo/domain/map_links.dart';
 import '../../nostr/data/we_ryadom_nostr_gateway.dart';
 import '../../nostr/domain/we_ryadom_nostr.dart';
 import '../../trust/data/report_store.dart';
 import '../../trust/domain/trust_guard.dart';
 import '../domain/chat_models.dart';
+import '../domain/shared_location_payload.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -40,9 +41,10 @@ class _ChatScreenState extends State<ChatScreen> {
   late ChatPalette _palette;
   StreamSubscription? _chatSubscription;
   bool _sending = false;
-  _ChatDeliveryState _deliveryState = _ChatDeliveryState.online;
+  bool _sharingLocation = false;
   bool _showAllQuickReplies = false;
   bool _hasDraft = false;
+  _ChatDeliveryState _deliveryState = _ChatDeliveryState.online;
 
   @override
   void initState() {
@@ -50,7 +52,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _palette = widget.initialChatPalette ?? ChatPalette.night;
     _messages.addAll(widget.session.messages);
     _chatSubscription = widget.nostrGateway.events.listen(_handleRelayEvent);
-    _hasDraft = _messageController.text.trim().isNotEmpty;
     _messageController.addListener(_onDraftChanged);
     _loadSavedPalette();
     _scheduleScrollToEnd();
@@ -66,7 +67,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onDraftChanged() {
     final hasDraft = _messageController.text.trim().isNotEmpty;
-    if (hasDraft == _hasDraft || !mounted) {
+    if (!mounted || hasDraft == _hasDraft) {
       return;
     }
     setState(() => _hasDraft = hasDraft);
@@ -94,48 +95,19 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  int? _lastOutgoingMessageIndex() {
-    for (var i = _messages.length - 1; i >= 0; i--) {
-      if (_messages[i].isCurrentUser) {
-        return i;
-      }
-    }
-    return null;
-  }
-
-  _MessageDeliveryStatus _deliveryStatusForMessage(int messageIndex) {
-    if (!_messages[messageIndex].isCurrentUser) {
-      return _MessageDeliveryStatus.none;
-    }
-    if (messageIndex != _lastOutgoingMessageIndex()) {
-      return _MessageDeliveryStatus.sent;
-    }
-    if (_sending) {
-      return _MessageDeliveryStatus.sending;
-    }
-    if (_deliveryState == _ChatDeliveryState.error) {
-      return _MessageDeliveryStatus.failed;
-    }
-    if (_deliveryState == _ChatDeliveryState.delivered) {
-      return _MessageDeliveryStatus.delivered;
-    }
-    return _MessageDeliveryStatus.sent;
-  }
-
-  String _deliveryLabelText(AppLocalizations l10n) => switch (_deliveryState) {
-        _ChatDeliveryState.online => l10n.chatDeliveryOnline,
-        _ChatDeliveryState.sending => l10n.chatDeliverySending,
-        _ChatDeliveryState.delivered => l10n.chatDeliveryDelivered,
-        _ChatDeliveryState.error => l10n.chatDeliveryError,
-      };
-
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final palette = _paletteData(_palette, Theme.of(context).brightness);
     final theme = Theme.of(context);
-    final canSend =
-        widget.session.participantPubkey != null && !_sending && _hasDraft;
+    final palette = _paletteData(_palette, theme.brightness);
+    final participantReady = widget.session.participantPubkey != null;
+    final canSend = participantReady && !_sending && _hasDraft;
+    final request = widget.session.request;
+    final canShareExactLocation = request.isOwnRequest &&
+        participantReady &&
+        request.latitude != null &&
+        request.longitude != null &&
+        !_sending;
     final quickReplies = _visibleQuickReplies(l10n);
 
     return Theme(
@@ -151,20 +123,11 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Scaffold(
         backgroundColor: palette.background,
         appBar: AppBar(
-          titleSpacing: 0,
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(44),
-            child: _RequestContextBar(
-              session: widget.session,
-              palette: palette,
-              l10n: l10n,
-            ),
-          ),
-          title: _MessengerAppBarTitle(
+          titleSpacing: 12,
+          title: _ChatTitle(
             name: widget.session.participant.name,
             subtitle: widget.session.participant.subtitle,
-            statusLabel: _deliveryLabelText(l10n),
-            deliveryState: _deliveryState,
+            deliveryLabel: _deliveryLabel(l10n),
             palette: palette,
           ),
           actions: [
@@ -209,88 +172,76 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(52),
+            child: _RequestContextBar(
+              session: widget.session,
+              palette: palette,
+              l10n: l10n,
+            ),
+          ),
         ),
         body: Column(
           children: [
             Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _ChatWallpaper(palette: palette),
-                  _messages.isEmpty
-                      ? _ChatEmptyState(palette: palette, l10n: l10n)
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final lastOutgoing = _lastOutgoingMessageIndex();
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      palette.background,
+                      Color.lerp(palette.background, palette.surface, 0.35)!,
+                    ],
+                  ),
+                ),
+                child: _messages.isEmpty
+                    ? _ChatEmptyState(palette: palette, l10n: l10n)
+                    : ListView.builder(
+                        controller: _scrollController,
+                        reverse: true,
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final messageIndex = _messages.length - 1 - index;
+                          final message = _messages[messageIndex];
+                          final previous = messageIndex > 0
+                              ? _messages[messageIndex - 1]
+                              : null;
+                          final next = messageIndex < _messages.length - 1
+                              ? _messages[messageIndex + 1]
+                              : null;
+                          final groupedWithPrevious = previous != null &&
+                              previous.isCurrentUser == message.isCurrentUser &&
+                              (message.isCurrentUser ||
+                                  previous.authorName == message.authorName);
+                          final groupedWithNext = next != null &&
+                              next.isCurrentUser == message.isCurrentUser &&
+                              (message.isCurrentUser ||
+                                  next.authorName == message.authorName);
 
-                            return ListView.builder(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
-                              reverse: true,
-                              itemCount: _messages.length + 1,
-                              itemBuilder: (context, index) {
-                                if (index == 0) {
-                                  return Padding(
-                                    padding: const EdgeInsets.only(
-                                      top: 6,
-                                      bottom: 16,
-                                    ),
-                                    child: _ChatDaySeparator(
-                                      label: l10n.chatToday,
-                                      palette: palette,
-                                    ),
-                                  );
-                                }
-
-                                final messageIndex = _messages.length - index;
-                                final message = _messages[messageIndex];
-                                final groupedWithPrevious = messageIndex > 0 &&
-                                    _messages[messageIndex - 1].isCurrentUser ==
-                                        message.isCurrentUser &&
-                                    (!_messages[messageIndex - 1]
-                                            .isCurrentUser ||
-                                        _messages[messageIndex - 1]
-                                                .authorName ==
-                                            message.authorName);
-                                final groupedWithNext = messageIndex <
-                                        _messages.length - 1 &&
-                                    _messages[messageIndex + 1].isCurrentUser ==
-                                        message.isCurrentUser &&
-                                    (!_messages[messageIndex + 1]
-                                            .isCurrentUser ||
-                                        _messages[messageIndex + 1]
-                                                .authorName ==
-                                            message.authorName);
-
-                                return Padding(
-                                  padding: EdgeInsets.only(
-                                    top: groupedWithPrevious ? 2 : 8,
-                                    bottom: groupedWithNext ? 2 : 6,
-                                  ),
-                                  child: _MessengerBubbleRow(
-                                    message: message,
-                                    palette: palette,
-                                    maxWidth: constraints.maxWidth * 0.78,
-                                    showAuthor: !message.isCurrentUser &&
-                                        !groupedWithPrevious,
-                                    isTail: !groupedWithNext,
-                                    deliveryStatus: messageIndex == lastOutgoing
-                                        ? _deliveryStatusForMessage(messageIndex)
-                                        : message.isCurrentUser
-                                            ? _MessageDeliveryStatus.sent
-                                            : _MessageDeliveryStatus.none,
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        ),
-                ],
+                          return Padding(
+                            padding: EdgeInsets.only(
+                              top: groupedWithPrevious ? 2 : 8,
+                              bottom: groupedWithNext ? 2 : 6,
+                            ),
+                            child: _MessageRow(
+                              message: message,
+                              palette: palette,
+                              showAuthor:
+                                  !message.isCurrentUser && !groupedWithPrevious,
+                              showAvatar:
+                                  !message.isCurrentUser && !groupedWithNext,
+                              deliveryStatus:
+                                  _deliveryStatusForMessage(messageIndex),
+                            ),
+                          );
+                        },
+                      ),
               ),
             ),
-            _MessengerComposer(
+            _ChatComposer(
               palette: palette,
-              theme: theme,
               l10n: l10n,
               controller: _messageController,
               quickReplies: quickReplies,
@@ -302,8 +253,12 @@ class _ChatScreenState extends State<ChatScreen> {
               onQuickReply: _sendMessage,
               canSend: canSend,
               isSending: _sending,
-              waitingForPeer: widget.session.participantPubkey == null,
+              waitingForPeer: !participantReady,
               onSend: () => _sendMessage(_messageController.text),
+              showLocationAction: request.isOwnRequest,
+              canShareLocation: canShareExactLocation,
+              isSharingLocation: _sharingLocation,
+              onShareLocation: _shareExactLocation,
             ),
           ],
         ),
@@ -311,44 +266,142 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  String _deliveryLabel(AppLocalizations l10n) {
+    return switch (_deliveryState) {
+      _ChatDeliveryState.online => l10n.chatDeliveryOnline,
+      _ChatDeliveryState.sending => l10n.chatDeliverySending,
+      _ChatDeliveryState.delivered => l10n.chatDeliveryDelivered,
+      _ChatDeliveryState.error => l10n.chatDeliveryError,
+    };
+  }
+
+  int? _lastOutgoingMessageIndex() {
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      if (_messages[i].isCurrentUser) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  _MessageDeliveryStatus _deliveryStatusForMessage(int messageIndex) {
+    if (!_messages[messageIndex].isCurrentUser) {
+      return _MessageDeliveryStatus.none;
+    }
+    if (messageIndex != _lastOutgoingMessageIndex()) {
+      return _MessageDeliveryStatus.sent;
+    }
+    if (_sending) {
+      return _MessageDeliveryStatus.sending;
+    }
+    if (_deliveryState == _ChatDeliveryState.error) {
+      return _MessageDeliveryStatus.failed;
+    }
+    if (_deliveryState == _ChatDeliveryState.delivered) {
+      return _MessageDeliveryStatus.delivered;
+    }
+    return _MessageDeliveryStatus.sent;
+  }
+
   Future<void> _sendMessage(String rawText) async {
     final text = rawText.trim();
-    if (text.isEmpty || _sending || widget.session.participantPubkey == null) {
+    if (text.isEmpty) {
       return;
+    }
+    await _publishOutgoingMessage(text, clearDraft: true);
+  }
+
+  Future<void> _shareExactLocation() async {
+    final request = widget.session.request;
+    final latitude = request.latitude;
+    final longitude = request.longitude;
+    if (!request.isOwnRequest ||
+        latitude == null ||
+        longitude == null ||
+        widget.session.participantPubkey == null ||
+        _sending) {
+      return;
+    }
+
+    final copy = _LocationCopy.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          icon: const Icon(Icons.location_on_outlined),
+          title: Text(copy.warningTitle),
+          content: Text(copy.warningBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(copy.cancel),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              icon: const Icon(Icons.near_me_outlined),
+              label: Text(copy.share),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _sharingLocation = true);
+    final payload = SharedLocationPayload(
+      latitude: latitude,
+      longitude: longitude,
+    ).encode();
+    await _publishOutgoingMessage(payload);
+    if (mounted) {
+      setState(() => _sharingLocation = false);
+    }
+  }
+
+  Future<String?> _publishOutgoingMessage(
+    String text, {
+    bool clearDraft = false,
+  }) async {
+    final participantPubkey = widget.session.participantPubkey;
+    if (_sending || participantPubkey == null) {
+      return null;
     }
 
     setState(() {
       _sending = true;
       _deliveryState = _ChatDeliveryState.sending;
     });
-    _messageController.clear();
-    _scheduleScrollToEnd();
+    if (clearDraft) {
+      _messageController.clear();
+    }
 
     final messageId = await widget.nostrGateway.publishChatMessage(
       requestId: widget.session.request.id,
       requestEventId: widget.session.requestEventId,
       requestAuthorPubkey: widget.session.requestAuthorPubkey,
-      recipientPubkey: widget.session.participantPubkey!,
+      recipientPubkey: participantPubkey,
       message: text,
     );
 
     if (!mounted) {
-      return;
+      return messageId;
     }
 
-    if (messageId != null) {
-      final localMessage = ChatMessage(
-        id: messageId,
-        authorName: context.l10n.chatYou,
-        text: text,
-        timeLabel: context.l10n.formatClock(DateTime.now()),
-        isCurrentUser: true,
-      );
-      if (!_messages.any((item) => item.id == messageId)) {
-        setState(() {
-          _messages.add(localMessage);
-        });
-      }
+    if (messageId != null && !_messages.any((item) => item.id == messageId)) {
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            id: messageId,
+            authorName: context.l10n.chatYou,
+            text: text,
+            timeLabel: context.l10n.formatClock(DateTime.now()),
+            isCurrentUser: true,
+          ),
+        );
+      });
+      _scheduleScrollToEnd();
     }
 
     setState(() {
@@ -368,6 +421,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
+    return messageId;
   }
 
   void _handleRelayEvent(dynamic record) {
@@ -408,7 +462,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) {
       return;
     }
-
     setState(() {
       _messages.add(message);
       _deliveryState = isCurrentUser
@@ -441,16 +494,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 16),
-                for (final palette in ChatPalette.values) ...[
-                  _PaletteRow(
-                    palette: palette,
-                    selected: palette == _palette,
-                    data: _paletteData(palette, Theme.of(context).brightness),
-                    l10n: l10n,
-                    onTap: () => Navigator.of(context).pop(palette),
+                for (final palette in ChatPalette.values)
+                  RadioListTile<ChatPalette>(
+                    value: palette,
+                    groupValue: _palette,
+                    title: Text(_paletteTitle(palette, l10n)),
+                    subtitle: Text(_paletteDescription(palette, l10n)),
+                    onChanged: (value) => Navigator.of(context).pop(value),
                   ),
-                  const SizedBox(height: 10),
-                ],
               ],
             ),
           ),
@@ -471,9 +522,7 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.chatBlockedSnackbar),
-        ),
+        SnackBar(content: Text(context.l10n.chatBlockedSnackbar)),
       );
       return;
     }
@@ -486,15 +535,11 @@ class _ChatScreenState extends State<ChatScreen> {
         reason: context.l10n.chatReportReason,
       );
     }
-
     if (!mounted) {
       return;
     }
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(context.l10n.chatReportSaved),
-      ),
+      SnackBar(content: Text(context.l10n.chatReportSaved)),
     );
   }
 
@@ -516,86 +561,54 @@ enum _ChatDeliveryState { online, sending, delivered, error }
 
 enum _MessageDeliveryStatus { none, sending, sent, delivered, failed }
 
-class _MessengerAppBarTitle extends StatelessWidget {
-  const _MessengerAppBarTitle({
+class _ChatTitle extends StatelessWidget {
+  const _ChatTitle({
     required this.name,
     required this.subtitle,
-    required this.statusLabel,
-    required this.deliveryState,
+    required this.deliveryLabel,
     required this.palette,
   });
 
   final String name;
   final String subtitle;
-  final String statusLabel;
-  final _ChatDeliveryState deliveryState;
+  final String deliveryLabel;
   final _ChatPaletteData palette;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final initials = _initialsFor(name);
-    final isOnline = deliveryState != _ChatDeliveryState.error &&
-        deliveryState != _ChatDeliveryState.sending;
-
     return Row(
       children: [
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: palette.accent.withValues(alpha: 0.2),
-              child: Text(
-                initials,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: palette.accent,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
+        CircleAvatar(
+          backgroundColor: palette.accent.withValues(alpha: 0.18),
+          child: Text(
+            _initialsFor(name),
+            style: TextStyle(
+              color: palette.accent,
+              fontWeight: FontWeight.w800,
             ),
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: isOnline
-                      ? const Color(0xFF4CD964)
-                      : palette.muted,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: palette.background, width: 2),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleLarge?.copyWith(
+                style: TextStyle(
+                  color: palette.onSurface,
                   fontSize: 17,
                   fontWeight: FontWeight.w700,
-                  color: palette.onSurface,
                 ),
               ),
-              const SizedBox(height: 2),
               Text(
-                '$subtitle · $statusLabel',
+                '$subtitle · $deliveryLabel',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: palette.muted,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: TextStyle(color: palette.muted, fontSize: 12),
               ),
             ],
           ),
@@ -618,13 +631,11 @@ class _RequestContextBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: palette.surface.withValues(alpha: 0.88),
+          color: palette.surface.withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: palette.border),
         ),
@@ -639,9 +650,9 @@ class _RequestContextBar extends StatelessWidget {
                   session.request.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                  style: TextStyle(
                     color: palette.onSurface,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -650,101 +661,13 @@ class _RequestContextBar extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 l10n.chatNoPrepay,
-                style: theme.textTheme.labelSmall?.copyWith(
+                style: TextStyle(
                   color: palette.muted,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ChatWallpaper extends StatelessWidget {
-  const _ChatWallpaper({required this.palette});
-
-  final _ChatPaletteData palette;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            palette.background,
-            Color.lerp(palette.background, palette.surface, 0.35)!,
-          ],
-        ),
-      ),
-      child: CustomPaint(
-        painter: _ChatDotsPainter(
-          dotColor: palette.border.withValues(alpha: 0.35),
-        ),
-        child: const SizedBox.expand(),
-      ),
-    );
-  }
-}
-
-class _ChatDotsPainter extends CustomPainter {
-  _ChatDotsPainter({required this.dotColor});
-
-  final Color dotColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = dotColor;
-    const step = 28.0;
-    for (var y = 0.0; y < size.height; y += step) {
-      for (var x = 0.0; x < size.width; x += step) {
-        canvas.drawCircle(Offset(x + 6, y + 6), 1.2, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ChatDotsPainter oldDelegate) {
-    return oldDelegate.dotColor != dotColor;
-  }
-}
-
-class _ChatDaySeparator extends StatelessWidget {
-  const _ChatDaySeparator({required this.label, required this.palette});
-
-  final String label;
-  final _ChatPaletteData palette;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: palette.surface.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: palette.border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: palette.muted,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
-            ),
           ),
         ),
       ),
@@ -760,8 +683,6 @@ class _ChatEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 36),
@@ -776,28 +697,24 @@ class _ChatEmptyState extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(color: palette.border),
               ),
-              child: Icon(
-                Icons.forum_outlined,
-                size: 34,
-                color: palette.accent,
-              ),
+              child: Icon(Icons.forum_outlined, size: 34, color: palette.accent),
             ),
             const SizedBox(height: 18),
             Text(
               l10n.chatStartMessage,
               textAlign: TextAlign.center,
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: palette.onSurface,
-              ),
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: palette.onSurface,
+                  ),
             ),
             const SizedBox(height: 8),
             Text(
               l10n.chatStartHint,
               textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: palette.muted,
-                height: 1.35,
-              ),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: palette.muted,
+                    height: 1.35,
+                  ),
             ),
           ],
         ),
@@ -806,36 +723,33 @@ class _ChatEmptyState extends StatelessWidget {
   }
 }
 
-class _MessengerBubbleRow extends StatelessWidget {
-  const _MessengerBubbleRow({
+class _MessageRow extends StatelessWidget {
+  const _MessageRow({
     required this.message,
     required this.palette,
-    required this.maxWidth,
     required this.showAuthor,
-    required this.isTail,
+    required this.showAvatar,
     required this.deliveryStatus,
   });
 
   final ChatMessage message;
   final _ChatPaletteData palette;
-  final double maxWidth;
   final bool showAuthor;
-  final bool isTail;
+  final bool showAvatar;
   final _MessageDeliveryStatus deliveryStatus;
 
   @override
   Widget build(BuildContext context) {
-    final isOutgoing = message.isCurrentUser;
-
+    final outgoing = message.isCurrentUser;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisAlignment:
-          isOutgoing ? MainAxisAlignment.end : MainAxisAlignment.start,
+          outgoing ? MainAxisAlignment.end : MainAxisAlignment.start,
       children: [
-        if (!isOutgoing) ...[
+        if (!outgoing) ...[
           SizedBox(
             width: 36,
-            child: isTail
+            child: showAvatar
                 ? CircleAvatar(
                     radius: 16,
                     backgroundColor: palette.accent.withValues(alpha: 0.18),
@@ -853,137 +767,190 @@ class _MessengerBubbleRow extends StatelessWidget {
           const SizedBox(width: 6),
         ],
         Flexible(
-          child: _MessengerBubble(
+          child: _MessageBubble(
             message: message,
             palette: palette,
-            maxWidth: maxWidth,
             showAuthor: showAuthor,
-            isTail: isTail,
             deliveryStatus: deliveryStatus,
           ),
         ),
-        if (isOutgoing) const SizedBox(width: 4),
       ],
     );
   }
 }
 
-class _MessengerBubble extends StatelessWidget {
-  const _MessengerBubble({
+class _MessageBubble extends StatelessWidget {
+  const _MessageBubble({
     required this.message,
     required this.palette,
-    required this.maxWidth,
     required this.showAuthor,
-    required this.isTail,
     required this.deliveryStatus,
   });
 
   final ChatMessage message;
   final _ChatPaletteData palette;
-  final double maxWidth;
   final bool showAuthor;
-  final bool isTail;
   final _MessageDeliveryStatus deliveryStatus;
 
   @override
   Widget build(BuildContext context) {
-    final isOutgoing = message.isCurrentUser;
-    final bubbleColor = isOutgoing ? palette.accent : palette.surface;
-    final textColor = isOutgoing ? palette.onAccent : palette.onSurface;
-    final metaColor = isOutgoing
+    final outgoing = message.isCurrentUser;
+    final bubbleColor = outgoing ? palette.accent : palette.surface;
+    final textColor = outgoing ? palette.onAccent : palette.onSurface;
+    final metaColor = outgoing
         ? palette.onAccent.withValues(alpha: 0.78)
         : palette.muted;
-    const corner = 18.0;
-    const groupedCorner = 12.0;
-    const tailCorner = 5.0;
+    final location = SharedLocationPayload.tryParse(message.text);
 
-    return Align(
-      alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(isOutgoing ? corner : groupedCorner),
-              topRight: Radius.circular(isOutgoing ? groupedCorner : corner),
-              bottomLeft: Radius.circular(
-                isOutgoing
-                    ? (isTail ? tailCorner : groupedCorner)
-                    : (isTail ? tailCorner : groupedCorner),
-              ),
-              bottomRight: Radius.circular(
-                isOutgoing
-                    ? (isTail ? tailCorner : groupedCorner)
-                    : (isTail ? tailCorner : groupedCorner),
-              ),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.circular(18),
+          border: outgoing ? null : Border.all(color: palette.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: outgoing ? 0.1 : 0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
             ),
-            border: isOutgoing
-                ? null
-                : Border.all(color: palette.border.withValues(alpha: 0.9)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isOutgoing ? 0.1 : 0.06),
-                blurRadius: isTail ? 10 : 6,
-                offset: const Offset(0, 3),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (showAuthor) ...[
+                Text(
+                  message.authorName,
+                  style: TextStyle(
+                    color: palette.accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (location == null)
+                Text(
+                  message.text,
+                  style: TextStyle(
+                    color: textColor,
+                    height: 1.32,
+                    fontSize: 16,
+                  ),
+                )
+              else
+                _SharedLocationCard(
+                  location: location,
+                  outgoing: outgoing,
+                  palette: palette,
+                  textColor: textColor,
+                ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      message.timeLabel,
+                      style: TextStyle(
+                        color: metaColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (outgoing) ...[
+                      const SizedBox(width: 3),
+                      _DeliveryTicks(status: deliveryStatus, color: metaColor),
+                    ],
+                  ],
+                ),
               ),
             ],
           ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(12, showAuthor ? 8 : 7, 10, 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (showAuthor) ...[
-                  Text(
-                    message.authorName,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: palette.accent,
-                      fontWeight: FontWeight.w800,
-                    ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SharedLocationCard extends StatelessWidget {
+  const _SharedLocationCard({
+    required this.location,
+    required this.outgoing,
+    required this.palette,
+    required this.textColor,
+  });
+
+  final SharedLocationPayload location;
+  final bool outgoing;
+  final _ChatPaletteData palette;
+  final Color textColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = _LocationCopy.of(context);
+    return SizedBox(
+      width: 230,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.location_on_rounded, color: textColor, size: 22),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  outgoing ? copy.locationSent : copy.locationReceived,
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 3),
-                ],
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.end,
-                  children: [
-                    Text(
-                      message.text,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: textColor,
-                        height: 1.32,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          message.timeLabel,
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: metaColor,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (isOutgoing) ...[
-                          const SizedBox(width: 3),
-                          _DeliveryTicks(
-                            status: deliveryStatus,
-                            color: metaColor,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
                 ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${location.latitude.toStringAsFixed(5)}, '
+            '${location.longitude.toStringAsFixed(5)}',
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.86),
+              fontSize: 13,
             ),
           ),
-        ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: textColor,
+                side: BorderSide(color: textColor.withValues(alpha: 0.45)),
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: () async {
+                final opened = await MapLinks.openInMaps(
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  preferred: MapApp.system,
+                );
+                if (!opened && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(copy.mapOpenFailed)),
+                  );
+                }
+              },
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: Text(copy.openMap),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -998,30 +965,20 @@ class _DeliveryTicks extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return switch (status) {
-      _MessageDeliveryStatus.sending => Icon(
-        Icons.schedule_rounded,
-        size: 14,
-        color: color,
-      ),
-      _MessageDeliveryStatus.failed => Icon(
-        Icons.error_outline_rounded,
-        size: 14,
-        color: color,
-      ),
-      _MessageDeliveryStatus.delivered => Icon(
-        Icons.done_all_rounded,
-        size: 15,
-        color: color,
-      ),
+      _MessageDeliveryStatus.sending =>
+        Icon(Icons.schedule_rounded, size: 14, color: color),
+      _MessageDeliveryStatus.failed =>
+        Icon(Icons.error_outline_rounded, size: 14, color: color),
+      _MessageDeliveryStatus.delivered =>
+        Icon(Icons.done_all_rounded, size: 15, color: color),
       _ => Icon(Icons.done_rounded, size: 14, color: color),
     };
   }
 }
 
-class _MessengerComposer extends StatelessWidget {
-  const _MessengerComposer({
+class _ChatComposer extends StatelessWidget {
+  const _ChatComposer({
     required this.palette,
-    required this.theme,
     required this.l10n,
     required this.controller,
     required this.quickReplies,
@@ -1033,10 +990,13 @@ class _MessengerComposer extends StatelessWidget {
     required this.isSending,
     required this.waitingForPeer,
     required this.onSend,
+    required this.showLocationAction,
+    required this.canShareLocation,
+    required this.isSharingLocation,
+    required this.onShareLocation,
   });
 
   final _ChatPaletteData palette;
-  final ThemeData theme;
   final AppLocalizations l10n;
   final TextEditingController controller;
   final List<String> quickReplies;
@@ -1048,11 +1008,14 @@ class _MessengerComposer extends StatelessWidget {
   final bool isSending;
   final bool waitingForPeer;
   final VoidCallback onSend;
+  final bool showLocationAction;
+  final bool canShareLocation;
+  final bool isSharingLocation;
+  final VoidCallback onShareLocation;
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-
+    final copy = _LocationCopy.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: palette.inputSurface.withValues(alpha: 0.98),
@@ -1068,7 +1031,7 @@ class _MessengerComposer extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + bottomInset),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1081,18 +1044,17 @@ class _MessengerComposer extends StatelessWidget {
                       for (final reply in quickReplies)
                         Padding(
                           padding: const EdgeInsets.only(right: 8),
-                          child: _QuickReplyChip(
-                            label: reply,
-                            palette: palette,
-                            onTap: () => onQuickReply(reply),
+                          child: ActionChip(
+                            label: Text(reply),
+                            onPressed: isSending ? null : () => onQuickReply(reply),
                           ),
                         ),
                       if (hasHiddenQuickReplies)
-                        _QuickReplyChip(
-                          label: showAllQuickReplies ? l10n.chatLess : l10n.chatMore,
-                          palette: palette,
-                          muted: true,
-                          onTap: onToggleQuickReplies,
+                        ActionChip(
+                          label: Text(
+                            showAllQuickReplies ? l10n.chatLess : l10n.chatMore,
+                          ),
+                          onPressed: onToggleQuickReplies,
                         ),
                     ],
                   ),
@@ -1101,11 +1063,31 @@ class _MessengerComposer extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  IconButton(
-                    onPressed: null,
-                    icon: Icon(Icons.add_rounded, color: palette.muted),
-                    tooltip: l10n.chatSoon,
-                  ),
+                  if (showLocationAction)
+                    IconButton(
+                      onPressed: canShareLocation ? onShareLocation : null,
+                      tooltip: canShareLocation
+                          ? copy.shareAction
+                          : copy.locationUnavailable,
+                      icon: isSharingLocation
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.location_on_outlined,
+                              color: canShareLocation
+                                  ? palette.accent
+                                  : palette.muted,
+                            ),
+                    )
+                  else
+                    IconButton(
+                      onPressed: null,
+                      tooltip: l10n.chatSoon,
+                      icon: Icon(Icons.add_rounded, color: palette.muted),
+                    ),
                   Expanded(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
@@ -1131,11 +1113,8 @@ class _MessengerComposer extends StatelessWidget {
                                 : l10n.chatMessageHint,
                             border: InputBorder.none,
                             isCollapsed: true,
-                            hintStyle: theme.textTheme.bodyLarge?.copyWith(
-                              color: palette.muted,
-                            ),
                           ),
-                          style: theme.textTheme.bodyLarge?.copyWith(
+                          style: TextStyle(
                             color: palette.onSurface,
                             height: 1.3,
                           ),
@@ -1144,11 +1123,36 @@ class _MessengerComposer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _SendButton(
-                    palette: palette,
-                    active: canSend,
-                    busy: isSending,
-                    onPressed: canSend ? onSend : null,
+                  Material(
+                    color: canSend ? palette.accent : palette.border,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      onTap: canSend ? onSend : null,
+                      customBorder: const CircleBorder(),
+                      child: SizedBox(
+                        width: 46,
+                        height: 46,
+                        child: Center(
+                          child: isSending && !isSharingLocation
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: palette.onAccent,
+                                  ),
+                                )
+                              : Icon(
+                                  canSend
+                                      ? Icons.send_rounded
+                                      : Icons.mic_none_rounded,
+                                  color: canSend
+                                      ? palette.onAccent
+                                      : palette.muted,
+                                ),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1160,187 +1164,60 @@ class _MessengerComposer extends StatelessWidget {
   }
 }
 
-class _QuickReplyChip extends StatelessWidget {
-  const _QuickReplyChip({
-    required this.label,
-    required this.palette,
-    required this.onTap,
-    this.muted = false,
+class _LocationCopy {
+  const _LocationCopy({
+    required this.shareAction,
+    required this.locationUnavailable,
+    required this.warningTitle,
+    required this.warningBody,
+    required this.cancel,
+    required this.share,
+    required this.locationSent,
+    required this.locationReceived,
+    required this.openMap,
+    required this.mapOpenFailed,
   });
 
-  final String label;
-  final _ChatPaletteData palette;
-  final VoidCallback onTap;
-  final bool muted;
+  final String shareAction;
+  final String locationUnavailable;
+  final String warningTitle;
+  final String warningBody;
+  final String cancel;
+  final String share;
+  final String locationSent;
+  final String locationReceived;
+  final String openMap;
+  final String mapOpenFailed;
 
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: muted ? palette.surface : palette.quickAction,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: muted ? palette.border : palette.quickAction,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: muted ? palette.onSurface : palette.quickActionText,
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SendButton extends StatelessWidget {
-  const _SendButton({
-    required this.palette,
-    required this.active,
-    required this.busy,
-    required this.onPressed,
-  });
-
-  final _ChatPaletteData palette;
-  final bool active;
-  final bool busy;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? palette.accent : palette.border;
-
-    return Material(
-      color: color,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onPressed,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 46,
-          height: 46,
-          child: Center(
-            child: busy
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: palette.onAccent,
-                    ),
-                  )
-                : Icon(
-                    active ? Icons.send_rounded : Icons.mic_none_rounded,
-                    color: active ? palette.onAccent : palette.muted,
-                    size: 22,
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PaletteRow extends StatelessWidget {
-  const _PaletteRow({
-    required this.palette,
-    required this.selected,
-    required this.data,
-    required this.l10n,
-    required this.onTap,
-  });
-
-  final ChatPalette palette;
-  final bool selected;
-  final _ChatPaletteData data;
-  final AppLocalizations l10n;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: data.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: selected ? data.accent : data.border,
-              width: selected ? 1.4 : 1,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _paletteTitle(palette, l10n),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleLarge?.copyWith(color: data.onSurface),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _paletteDescription(palette, l10n),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(color: data.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _ColorDot(data.accent),
-                    const SizedBox(width: 6),
-                    _ColorDot(data.surface),
-                    const SizedBox(width: 6),
-                    _ColorDot(data.quickAction),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ColorDot extends StatelessWidget {
-  const _ColorDot(this.color);
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 16,
-      height: 16,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-      ),
+  factory _LocationCopy.of(BuildContext context) {
+    final isRussian = Localizations.localeOf(context).languageCode == 'ru';
+    if (isRussian) {
+      return const _LocationCopy(
+        shareAction: 'Поделиться точным местоположением',
+        locationUnavailable: 'Точная геопозиция сейчас недоступна',
+        warningTitle: 'Передать точное местоположение?',
+        warningBody:
+            'Передавайте точное местоположение только тому, кому доверяете. Не уверены — не отправляйте.',
+        cancel: 'Отмена',
+        share: 'Поделиться',
+        locationSent: 'Точное местоположение отправлено',
+        locationReceived: 'Точное местоположение',
+        openMap: 'Открыть на карте',
+        mapOpenFailed: 'Не удалось открыть карты',
+      );
+    }
+    return const _LocationCopy(
+      shareAction: 'Share exact location',
+      locationUnavailable: 'Exact location is not available right now',
+      warningTitle: 'Share your exact location?',
+      warningBody:
+          'Only share your exact location with someone you trust. If you are unsure, do not send it.',
+      cancel: 'Cancel',
+      share: 'Share',
+      locationSent: 'Exact location sent',
+      locationReceived: 'Exact location',
+      openMap: 'Open in maps',
+      mapOpenFailed: 'Could not open maps',
     );
   }
 }
@@ -1350,27 +1227,21 @@ class _ChatPaletteData {
     required this.background,
     required this.surface,
     required this.inputSurface,
-    required this.tagSurface,
     required this.accent,
     required this.onAccent,
     required this.onSurface,
     required this.muted,
     required this.border,
-    required this.quickAction,
-    required this.quickActionText,
   });
 
   final Color background;
   final Color surface;
   final Color inputSurface;
-  final Color tagSurface;
   final Color accent;
   final Color onAccent;
   final Color onSurface;
   final Color muted;
   final Color border;
-  final Color quickAction;
-  final Color quickActionText;
 }
 
 _ChatPaletteData _chatPaletteFromRyadom(RyadomPalette palette) {
@@ -1378,42 +1249,34 @@ _ChatPaletteData _chatPaletteFromRyadom(RyadomPalette palette) {
     background: palette.background,
     surface: palette.surface,
     inputSurface: palette.inputSurface,
-    tagSurface: palette.tagSurface,
     accent: palette.accent,
     onAccent: palette.onAccent,
     onSurface: palette.onSurface,
     muted: palette.muted,
     border: palette.border,
-    quickAction: palette.tagSurface,
-    quickActionText: palette.secondary,
   );
 }
 
 _ChatPaletteData _paletteData(ChatPalette palette, Brightness brightness) {
   final isDark = brightness == Brightness.dark;
-
   return switch (palette) {
     ChatPalette.calm => _chatPaletteFromRyadom(
-      brightness == Brightness.dark
-          ? RyadomPalette.classic
-          : RyadomPalette.day,
-    ),
+        brightness == Brightness.dark
+            ? RyadomPalette.classic
+            : RyadomPalette.day,
+      ),
     ChatPalette.night => _chatPaletteFromRyadom(RyadomPalette.night),
     ChatPalette.warm => _ChatPaletteData(
-      background: isDark ? const Color(0xFF19100D) : const Color(0xFFF9F0E7),
-      surface: isDark ? const Color(0xFF2A1D18) : const Color(0xFFFFFBF6),
-      inputSurface: isDark ? const Color(0xFF32231D) : const Color(0xFFFFF5EB),
-      tagSurface: isDark ? const Color(0xFF3A2920) : const Color(0xFFF7E7D6),
-      accent: isDark ? const Color(0xFFFFB07D) : const Color(0xFFC97C5D),
-      onAccent: isDark ? const Color(0xFF382012) : Colors.white,
-      onSurface: isDark ? const Color(0xFFF8EBE2) : const Color(0xFF382219),
-      muted: isDark ? const Color(0xFFD0B7AA) : const Color(0xFF886A5D),
-      border: isDark ? const Color(0xFF4A342A) : const Color(0xFFE9D4C6),
-      quickAction: isDark ? const Color(0xFF4B3427) : const Color(0xFFF7E3D8),
-      quickActionText: isDark
-          ? const Color(0xFFFFD8C0)
-          : const Color(0xFF8D5239),
-    ),
+        background: isDark ? const Color(0xFF19100D) : const Color(0xFFF9F0E7),
+        surface: isDark ? const Color(0xFF2A1D18) : const Color(0xFFFFFBF6),
+        inputSurface:
+            isDark ? const Color(0xFF32231D) : const Color(0xFFFFF5EB),
+        accent: isDark ? const Color(0xFFFFB07D) : const Color(0xFFC97C5D),
+        onAccent: isDark ? const Color(0xFF382012) : Colors.white,
+        onSurface: isDark ? const Color(0xFFF8EBE2) : const Color(0xFF382219),
+        muted: isDark ? const Color(0xFFD0B7AA) : const Color(0xFF886A5D),
+        border: isDark ? const Color(0xFF4A342A) : const Color(0xFFE9D4C6),
+      ),
     ChatPalette.cyberpunk => _chatPaletteFromRyadom(RyadomPalette.cyberpunk),
   };
 }
@@ -1445,7 +1308,6 @@ List<String> _quickReplies(HelpChatSession session, AppLocalizations l10n) {
       l10n.chatQuickReplyHelper4,
     ];
   }
-
   return [
     l10n.chatQuickReplyResponder1,
     l10n.chatQuickReplyResponder2,
@@ -1459,15 +1321,9 @@ String _initialsFor(String name) {
   if (parts.isEmpty || parts.first.isEmpty) {
     return '?';
   }
-  String head(String value, int count) {
-    if (value.length <= count) {
-      return value;
-    }
-    return value.substring(0, count);
-  }
-
   if (parts.length == 1) {
-    return head(parts.first, 2).toUpperCase();
+    final value = parts.first;
+    return value.substring(0, value.length > 2 ? 2 : value.length).toUpperCase();
   }
   return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
 }
