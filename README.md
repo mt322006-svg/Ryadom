@@ -1,4 +1,6 @@
-# Мы Рядом
+# Мы Рядом (Ryadom)
+
+**Бесплатно. Open source. Без комиссий.**
 
 Android-first Flutter-приложение для быстрой **локальной** помощи рядом.
 
@@ -10,7 +12,7 @@ Android-first Flutter-приложение для быстрой **локаль�
 4. автор выбирает помощника  
 5. договариваются в чате, завершают, оценивают  
 
-**Помощь важнее монетизации.** Открытый исходный код — когда петля на живых телефонах стабильна.
+**Людям надо помогать.** Приложение — инструмент для этого, не бизнес-модель.
 
 ## Стек
 
@@ -18,20 +20,19 @@ Android-first Flutter-приложение для быстрой **локаль�
 |--|--|
 | UI | Flutter (Material 3) |
 | Платформа | Android first |
-| Связь | Nostr (relay, события запросов / откликов / чата) |
-| Гео | опционально, публично только **приблизительная зона** |
-| Локализация | `ru` (по умолчанию), `en` |
+| Связь | Nostr (relay: запросы, отклики, чат) |
+| Гео | опционально; публично только **приблизительная зона** |
+| Языки | `ru` (по умолчанию), `en` |
 
-Пакет приложения: `com.ryadom`  
-Версия: см. `pubspec.yaml`
+Пакет: `com.ryadom` · версия: `pubspec.yaml` · лицензия: **Apache-2.0**
 
 ## Возможности MVP
 
-- Радар с **зонами близости** (кольца) и обновлением гео  
+- Радар с **зонами близости** и обновлением гео  
 - Создание запроса, отклик, выбор помощника, чат (NIP-44)  
 - Отмена своего запроса, TTL неактивных сигналов  
 - Радиус поиска 500 м … 10 км  
-- Открытие ориентира зоны в Яндекс / Google Картах  
+- Ориентир зоны в Яндекс / Google Картах  
 - Темы: классическая, ночная, светлая, киберпанк  
 - Блок / жалоба, rate limit откликов  
 
@@ -42,8 +43,6 @@ flutter pub get
 flutter run
 ```
 
-Тесты:
-
 ```bash
 flutter test
 flutter analyze lib test
@@ -52,49 +51,64 @@ flutter analyze lib test
 ## Сборка APK
 
 ```powershell
-# release
 flutter build apk --release
-
-# или скрипт
+# или
 .\scripts\build-apk.ps1
 ```
 
-Готовый файл: `build/app/outputs/flutter-apk/app-release.apk`  
-(копия вида `ryadom-<version>.apk` — если используете `scripts/build-apk.ps1`).
+Файл: `build/app/outputs/flutter-apk/app-release.apk`  
 
-Подпись: `android/key.properties` (не в git; есть `key.properties.example`).
+Подпись: `android/key.properties` **не коммить** (есть `key.properties.example`).
 
-## Два телефона
+## Два телефона (живая проверка)
 
-1. Один и тот же **relay** в настройках Nostr (например `wss://nos.lol`)  
-2. На обоих — гео и похожий радиус  
-3. Телефон A: «Нужна помощь» → опубликовать  
-4. Телефон B: радар / «Запросы» → отклик  
-5. A: увидеть движение → чат  
+1. Один **relay** Nostr на обоих (например `wss://nos.lol`)  
+2. Гео и похожий радиус  
+3. A: «Нужна помощь» → опубликовать  
+4. B: радар / «Запросы» → отклик  
+5. A: движение → чат  
 
 Подробнее: [docs/two_phone_test_flow.md](docs/two_phone_test_flow.md)
 
 ## Документация
 
-Каталог [docs/](docs/README.md) — видение, MVP, гео, Nostr, trust & safety, журнал сессий.
+[docs/](docs/README.md) — видение, MVP, гео, Nostr, trust & safety.
 
 ## Структура
 
 ```
 lib/
-  app/                 # MaterialApp, locale, theme
+  app/           # MaterialApp, locale, theme
   features/
-    home/              # радар, навигация
-    requests/          # создание и lifecycle запросов
-    chat/              # чат
-    nostr/             # gateway, store, NIP-44
-    geo/               # privacy buckets, map links
-    trust/             # block / report / rate limit
+    home/        # радар
+    requests/    # запросы
+    chat/
+    nostr/
+    geo/
+    trust/
     settings/
-  l10n/                # ru / en
+  l10n/          # ru / en
   theme/
 ```
 
+## Участие
+
+Issues и pull request приветствуются.
+
+- Перед PR: `flutter test` и `flutter analyze lib test`  
+- Не присылайте `key.properties`, keystore, приватные ключи Nostr  
+- Крупные идеи — сначала issue, чтобы согласовать направление  
+
+Баги, relay, переводы, UI — всё полезно.
+
+## Принципы
+
+- помощь > монетизация  
+- приблизительная гео-зона, не «точка у двери»  
+- один ясный следующий шаг на экране  
+- спокойный интерфейс, без шума  
+
 ## Лицензия
 
-См. [LICENSE](LICENSE). Выбор публичной лицензии — к моменту open source релиза.
+[Apache License 2.0](LICENSE) — используйте, форкайте, улучшайте.  
+Продукт остаётся **бесплатным** для людей, которым нужна помощь рядом.
