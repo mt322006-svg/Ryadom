@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/l10n_ext.dart';
+import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_palette.dart';
 import '../../geo/domain/map_links.dart';
 import '../../nostr/data/we_ryadom_nostr_gateway.dart';
@@ -103,11 +105,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final participantReady = widget.session.participantPubkey != null;
     final canSend = participantReady && !_sending && _hasDraft;
     final request = widget.session.request;
-    final canShareExactLocation = request.isOwnRequest &&
-        participantReady &&
-        request.latitude != null &&
-        request.longitude != null &&
-        !_sending;
+    final canShareExactLocation =
+        request.isOwnRequest && participantReady && !_sending;
     final quickReplies = _visibleQuickReplies(l10n);
 
     return Theme(
@@ -312,12 +311,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _shareExactLocation() async {
-    final request = widget.session.request;
-    final latitude = request.latitude;
-    final longitude = request.longitude;
-    if (!request.isOwnRequest ||
-        latitude == null ||
-        longitude == null ||
+    if (!widget.session.request.isOwnRequest ||
         widget.session.participantPubkey == null ||
         _sending) {
       return;
@@ -350,14 +344,66 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     setState(() => _sharingLocation = true);
+    final position = await _captureExactPosition();
+    if (!mounted) {
+      return;
+    }
+    if (position == null) {
+      setState(() => _sharingLocation = false);
+      return;
+    }
+
     final payload = SharedLocationPayload(
-      latitude: latitude,
-      longitude: longitude,
+      latitude: position.latitude,
+      longitude: position.longitude,
     ).encode();
     await _publishOutgoingMessage(payload);
     if (mounted) {
       setState(() => _sharingLocation = false);
     }
+  }
+
+  Future<Position?> _captureExactPosition() async {
+    final copy = _LocationCopy.of(context);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _showLocationError(copy.locationServicesOff);
+        return null;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showLocationError(copy.locationPermissionDenied);
+        return null;
+      }
+
+      return Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      _showLocationError(copy.locationCaptureFailed);
+      return null;
+    }
+  }
+
+  void _showLocationError(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<String?> _publishOutgoingMessage(
@@ -1176,6 +1222,9 @@ class _LocationCopy {
     required this.locationReceived,
     required this.openMap,
     required this.mapOpenFailed,
+    required this.locationServicesOff,
+    required this.locationPermissionDenied,
+    required this.locationCaptureFailed,
   });
 
   final String shareAction;
@@ -1188,13 +1237,16 @@ class _LocationCopy {
   final String locationReceived;
   final String openMap;
   final String mapOpenFailed;
+  final String locationServicesOff;
+  final String locationPermissionDenied;
+  final String locationCaptureFailed;
 
   factory _LocationCopy.of(BuildContext context) {
     final isRussian = Localizations.localeOf(context).languageCode == 'ru';
     if (isRussian) {
       return const _LocationCopy(
         shareAction: 'Поделиться точным местоположением',
-        locationUnavailable: 'Точная геопозиция сейчас недоступна',
+        locationUnavailable: 'Сначала выберите помощника',
         warningTitle: 'Передать точное местоположение?',
         warningBody:
             'Передавайте точное местоположение только тому, кому доверяете. Не уверены — не отправляйте.',
@@ -1204,11 +1256,16 @@ class _LocationCopy {
         locationReceived: 'Точное местоположение',
         openMap: 'Открыть на карте',
         mapOpenFailed: 'Не удалось открыть карты',
+        locationServicesOff: 'Включите геолокацию, чтобы передать точную точку.',
+        locationPermissionDenied:
+            'Нет доступа к геолокации. Точная точка не отправлена.',
+        locationCaptureFailed:
+            'Не удалось определить точное местоположение. Попробуйте ещё раз.',
       );
     }
     return const _LocationCopy(
       shareAction: 'Share exact location',
-      locationUnavailable: 'Exact location is not available right now',
+      locationUnavailable: 'Choose a helper first',
       warningTitle: 'Share your exact location?',
       warningBody:
           'Only share your exact location with someone you trust. If you are unsure, do not send it.',
@@ -1218,6 +1275,11 @@ class _LocationCopy {
       locationReceived: 'Exact location',
       openMap: 'Open in maps',
       mapOpenFailed: 'Could not open maps',
+      locationServicesOff: 'Turn on location services to share your exact point.',
+      locationPermissionDenied:
+          'Location access was not granted. The exact point was not sent.',
+      locationCaptureFailed:
+          'Could not determine your exact location. Please try again.',
     );
   }
 }
