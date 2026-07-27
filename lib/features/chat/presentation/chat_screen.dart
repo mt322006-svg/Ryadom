@@ -1,16 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/l10n_ext.dart';
 import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_palette.dart';
+import '../../geo/domain/map_links.dart';
 import '../../nostr/data/we_ryadom_nostr_gateway.dart';
 import '../../nostr/domain/we_ryadom_nostr.dart';
 import '../../trust/data/report_store.dart';
 import '../../trust/domain/trust_guard.dart';
 import '../domain/chat_models.dart';
+import '../domain/shared_location_payload.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -40,6 +43,7 @@ class _ChatScreenState extends State<ChatScreen> {
   late ChatPalette _palette;
   StreamSubscription? _chatSubscription;
   bool _sending = false;
+  bool _sharingLocation = false;
   _ChatDeliveryState _deliveryState = _ChatDeliveryState.online;
   bool _showAllQuickReplies = false;
   bool _hasDraft = false;
@@ -136,6 +140,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final theme = Theme.of(context);
     final canSend =
         widget.session.participantPubkey != null && !_sending && _hasDraft;
+    final canShareLocation = widget.session.request.isOwnRequest &&
+        widget.session.participantPubkey != null &&
+        !_sending;
     final quickReplies = _visibleQuickReplies(l10n);
 
     return Theme(
@@ -304,6 +311,10 @@ class _ChatScreenState extends State<ChatScreen> {
               isSending: _sending,
               waitingForPeer: widget.session.participantPubkey == null,
               onSend: () => _sendMessage(_messageController.text),
+              showLocationAction: widget.session.request.isOwnRequest,
+              canShareLocation: canShareLocation,
+              isSharingLocation: _sharingLocation,
+              onShareLocation: _shareExactLocation,
             ),
           ],
         ),
@@ -368,6 +379,149 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _shareExactLocation() async {
+    if (!widget.session.request.isOwnRequest ||
+        widget.session.participantPubkey == null ||
+        _sending) {
+      return;
+    }
+
+    final copy = _LocationCopy.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          icon: const Icon(Icons.location_on_outlined),
+          title: Text(copy.warningTitle),
+          content: Text(copy.warningBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(copy.cancel),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              icon: const Icon(Icons.near_me_outlined),
+              label: Text(copy.share),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _sharingLocation = true);
+    final position = await _captureExactPosition();
+    if (!mounted) {
+      return;
+    }
+    if (position == null) {
+      setState(() => _sharingLocation = false);
+      return;
+    }
+
+    final payload = SharedLocationPayload(
+      latitude: position.latitude,
+      longitude: position.longitude,
+    ).encode();
+
+    setState(() {
+      _sending = true;
+      _deliveryState = _ChatDeliveryState.sending;
+    });
+
+    final messageId = await widget.nostrGateway.publishChatMessage(
+      requestId: widget.session.request.id,
+      requestEventId: widget.session.requestEventId,
+      requestAuthorPubkey: widget.session.requestAuthorPubkey,
+      recipientPubkey: widget.session.participantPubkey!,
+      message: payload,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (messageId != null && !_messages.any((item) => item.id == messageId)) {
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            id: messageId,
+            authorName: context.l10n.chatYou,
+            text: payload,
+            timeLabel: context.l10n.formatClock(DateTime.now()),
+            isCurrentUser: true,
+          ),
+        );
+      });
+      _scheduleScrollToEnd();
+    }
+
+    setState(() {
+      _sending = false;
+      _sharingLocation = false;
+      _deliveryState = messageId != null
+          ? _ChatDeliveryState.delivered
+          : _ChatDeliveryState.error;
+    });
+
+    if (messageId == null) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.l10n.chatSendFailed),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<Position?> _captureExactPosition() async {
+    final copy = _LocationCopy.of(context);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _showLocationError(copy.locationServicesOff);
+        return null;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showLocationError(copy.locationPermissionDenied);
+        return null;
+      }
+
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      _showLocationError(copy.locationCaptureFailed);
+      return null;
+    }
+  }
+
+  void _showLocationError(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _handleRelayEvent(dynamic record) {
@@ -893,6 +1047,7 @@ class _MessengerBubble extends StatelessWidget {
     final metaColor = isOutgoing
         ? palette.onAccent.withValues(alpha: 0.78)
         : palette.muted;
+    final location = SharedLocationPayload.tryParse(message.text);
     const corner = 18.0;
     const groupedCorner = 12.0;
     const tailCorner = 5.0;
@@ -949,14 +1104,22 @@ class _MessengerBubble extends StatelessWidget {
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.end,
                   children: [
-                    Text(
-                      message.text,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: textColor,
-                        height: 1.32,
-                        fontSize: 16,
+                    if (location == null)
+                      Text(
+                        message.text,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: textColor,
+                          height: 1.32,
+                          fontSize: 16,
+                        ),
+                      )
+                    else
+                      _SharedLocationCard(
+                        location: location,
+                        isOutgoing: isOutgoing,
+                        palette: palette,
+                        textColor: textColor,
                       ),
-                    ),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -989,6 +1152,82 @@ class _MessengerBubble extends StatelessWidget {
   }
 }
 
+class _SharedLocationCard extends StatelessWidget {
+  const _SharedLocationCard({
+    required this.location,
+    required this.isOutgoing,
+    required this.palette,
+    required this.textColor,
+  });
+
+  final SharedLocationPayload location;
+  final bool isOutgoing;
+  final _ChatPaletteData palette;
+  final Color textColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = _LocationCopy.of(context);
+    return SizedBox(
+      width: 220,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.location_on_rounded, color: textColor, size: 22),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  isOutgoing ? copy.locationSent : copy.locationReceived,
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${location.latitude.toStringAsFixed(5)}, '
+            '${location.longitude.toStringAsFixed(5)}',
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.86),
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: textColor,
+                side: BorderSide(color: textColor.withValues(alpha: 0.45)),
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: () async {
+                final opened = await MapLinks.openInMaps(
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  preferred: MapApp.system,
+                );
+                if (!opened && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(copy.mapOpenFailed)),
+                  );
+                }
+              },
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: Text(copy.openMap),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DeliveryTicks extends StatelessWidget {
   const _DeliveryTicks({required this.status, required this.color});
 
@@ -999,20 +1238,20 @@ class _DeliveryTicks extends StatelessWidget {
   Widget build(BuildContext context) {
     return switch (status) {
       _MessageDeliveryStatus.sending => Icon(
-        Icons.schedule_rounded,
-        size: 14,
-        color: color,
-      ),
+          Icons.schedule_rounded,
+          size: 14,
+          color: color,
+        ),
       _MessageDeliveryStatus.failed => Icon(
-        Icons.error_outline_rounded,
-        size: 14,
-        color: color,
-      ),
+          Icons.error_outline_rounded,
+          size: 14,
+          color: color,
+        ),
       _MessageDeliveryStatus.delivered => Icon(
-        Icons.done_all_rounded,
-        size: 15,
-        color: color,
-      ),
+          Icons.done_all_rounded,
+          size: 15,
+          color: color,
+        ),
       _ => Icon(Icons.done_rounded, size: 14, color: color),
     };
   }
@@ -1033,6 +1272,10 @@ class _MessengerComposer extends StatelessWidget {
     required this.isSending,
     required this.waitingForPeer,
     required this.onSend,
+    required this.showLocationAction,
+    required this.canShareLocation,
+    required this.isSharingLocation,
+    required this.onShareLocation,
   });
 
   final _ChatPaletteData palette;
@@ -1048,10 +1291,15 @@ class _MessengerComposer extends StatelessWidget {
   final bool isSending;
   final bool waitingForPeer;
   final VoidCallback onSend;
+  final bool showLocationAction;
+  final bool canShareLocation;
+  final bool isSharingLocation;
+  final VoidCallback onShareLocation;
 
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
+    final locationCopy = _LocationCopy.of(context);
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1089,7 +1337,8 @@ class _MessengerComposer extends StatelessWidget {
                         ),
                       if (hasHiddenQuickReplies)
                         _QuickReplyChip(
-                          label: showAllQuickReplies ? l10n.chatLess : l10n.chatMore,
+                          label:
+                              showAllQuickReplies ? l10n.chatLess : l10n.chatMore,
                           palette: palette,
                           muted: true,
                           onTap: onToggleQuickReplies,
@@ -1101,11 +1350,31 @@ class _MessengerComposer extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  IconButton(
-                    onPressed: null,
-                    icon: Icon(Icons.add_rounded, color: palette.muted),
-                    tooltip: l10n.chatSoon,
-                  ),
+                  if (showLocationAction)
+                    IconButton(
+                      onPressed: canShareLocation ? onShareLocation : null,
+                      icon: isSharingLocation
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.location_on_outlined,
+                              color: canShareLocation
+                                  ? palette.accent
+                                  : palette.muted,
+                            ),
+                      tooltip: canShareLocation
+                          ? locationCopy.shareAction
+                          : locationCopy.locationUnavailable,
+                    )
+                  else
+                    IconButton(
+                      onPressed: null,
+                      icon: Icon(Icons.add_rounded, color: palette.muted),
+                      tooltip: l10n.chatSoon,
+                    ),
                   Expanded(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
@@ -1147,7 +1416,7 @@ class _MessengerComposer extends StatelessWidget {
                   _SendButton(
                     palette: palette,
                     active: canSend,
-                    busy: isSending,
+                    busy: isSending && !isSharingLocation,
                     onPressed: canSend ? onSend : null,
                   ),
                 ],
@@ -1345,6 +1614,80 @@ class _ColorDot extends StatelessWidget {
   }
 }
 
+class _LocationCopy {
+  const _LocationCopy({
+    required this.shareAction,
+    required this.locationUnavailable,
+    required this.warningTitle,
+    required this.warningBody,
+    required this.cancel,
+    required this.share,
+    required this.locationSent,
+    required this.locationReceived,
+    required this.openMap,
+    required this.mapOpenFailed,
+    required this.locationServicesOff,
+    required this.locationPermissionDenied,
+    required this.locationCaptureFailed,
+  });
+
+  final String shareAction;
+  final String locationUnavailable;
+  final String warningTitle;
+  final String warningBody;
+  final String cancel;
+  final String share;
+  final String locationSent;
+  final String locationReceived;
+  final String openMap;
+  final String mapOpenFailed;
+  final String locationServicesOff;
+  final String locationPermissionDenied;
+  final String locationCaptureFailed;
+
+  factory _LocationCopy.of(BuildContext context) {
+    final isRussian = Localizations.localeOf(context).languageCode == 'ru';
+    if (isRussian) {
+      return const _LocationCopy(
+        shareAction: 'Поделиться точным местоположением',
+        locationUnavailable: 'Сначала выберите помощника',
+        warningTitle: 'Передать точное местоположение?',
+        warningBody:
+            'Передавайте точное местоположение только тому, кому доверяете. Не уверены — не отправляйте.',
+        cancel: 'Отмена',
+        share: 'Поделиться',
+        locationSent: 'Точное местоположение отправлено',
+        locationReceived: 'Точное местоположение',
+        openMap: 'Открыть на карте',
+        mapOpenFailed: 'Не удалось открыть карты',
+        locationServicesOff: 'Включите геолокацию, чтобы передать точную точку.',
+        locationPermissionDenied:
+            'Нет доступа к геолокации. Точная точка не отправлена.',
+        locationCaptureFailed:
+            'Не удалось определить точное местоположение. Попробуйте ещё раз.',
+      );
+    }
+    return const _LocationCopy(
+      shareAction: 'Share exact location',
+      locationUnavailable: 'Choose a helper first',
+      warningTitle: 'Share your exact location?',
+      warningBody:
+          'Only share your exact location with someone you trust. If you are unsure, do not send it.',
+      cancel: 'Cancel',
+      share: 'Share',
+      locationSent: 'Exact location sent',
+      locationReceived: 'Exact location',
+      openMap: 'Open in maps',
+      mapOpenFailed: 'Could not open maps',
+      locationServicesOff: 'Turn on location services to share your exact point.',
+      locationPermissionDenied:
+          'Location access was not granted. The exact point was not sent.',
+      locationCaptureFailed:
+          'Could not determine your exact location. Please try again.',
+    );
+  }
+}
+
 class _ChatPaletteData {
   const _ChatPaletteData({
     required this.background,
@@ -1394,26 +1737,28 @@ _ChatPaletteData _paletteData(ChatPalette palette, Brightness brightness) {
 
   return switch (palette) {
     ChatPalette.calm => _chatPaletteFromRyadom(
-      brightness == Brightness.dark
-          ? RyadomPalette.classic
-          : RyadomPalette.day,
-    ),
+        brightness == Brightness.dark
+            ? RyadomPalette.classic
+            : RyadomPalette.day,
+      ),
     ChatPalette.night => _chatPaletteFromRyadom(RyadomPalette.night),
     ChatPalette.warm => _ChatPaletteData(
-      background: isDark ? const Color(0xFF19100D) : const Color(0xFFF9F0E7),
-      surface: isDark ? const Color(0xFF2A1D18) : const Color(0xFFFFFBF6),
-      inputSurface: isDark ? const Color(0xFF32231D) : const Color(0xFFFFF5EB),
-      tagSurface: isDark ? const Color(0xFF3A2920) : const Color(0xFFF7E7D6),
-      accent: isDark ? const Color(0xFFFFB07D) : const Color(0xFFC97C5D),
-      onAccent: isDark ? const Color(0xFF382012) : Colors.white,
-      onSurface: isDark ? const Color(0xFFF8EBE2) : const Color(0xFF382219),
-      muted: isDark ? const Color(0xFFD0B7AA) : const Color(0xFF886A5D),
-      border: isDark ? const Color(0xFF4A342A) : const Color(0xFFE9D4C6),
-      quickAction: isDark ? const Color(0xFF4B3427) : const Color(0xFFF7E3D8),
-      quickActionText: isDark
-          ? const Color(0xFFFFD8C0)
-          : const Color(0xFF8D5239),
-    ),
+        background: isDark ? const Color(0xFF19100D) : const Color(0xFFF9F0E7),
+        surface: isDark ? const Color(0xFF2A1D18) : const Color(0xFFFFFBF6),
+        inputSurface:
+            isDark ? const Color(0xFF32231D) : const Color(0xFFFFF5EB),
+        tagSurface: isDark ? const Color(0xFF3A2920) : const Color(0xFFF7E7D6),
+        accent: isDark ? const Color(0xFFFFB07D) : const Color(0xFFC97C5D),
+        onAccent: isDark ? const Color(0xFF382012) : Colors.white,
+        onSurface: isDark ? const Color(0xFFF8EBE2) : const Color(0xFF382219),
+        muted: isDark ? const Color(0xFFD0B7AA) : const Color(0xFF886A5D),
+        border: isDark ? const Color(0xFF4A342A) : const Color(0xFFE9D4C6),
+        quickAction:
+            isDark ? const Color(0xFF4B3427) : const Color(0xFFF7E3D8),
+        quickActionText: isDark
+            ? const Color(0xFFFFD8C0)
+            : const Color(0xFF8D5239),
+      ),
     ChatPalette.cyberpunk => _chatPaletteFromRyadom(RyadomPalette.cyberpunk),
   };
 }
