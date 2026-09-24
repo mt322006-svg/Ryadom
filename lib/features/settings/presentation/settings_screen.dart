@@ -119,36 +119,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           Text(l10n.settingsConnectionAndMap, style: theme.textTheme.titleLarge),
           const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: [
-                if (widget.onOpenRelay != null)
+          if (widget.onOpenGeo != null)
+            Card(
+              child: ListTile(
+                leading: Icon(
+                  Icons.my_location_rounded,
+                  color: theme.colorScheme.primary,
+                ),
+                title: Text(l10n.settingsGeoRadius),
+                subtitle: Text(l10n.settingsGeoRadiusHint),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: widget.onOpenGeo,
+              ),
+            ),
+          if (widget.onOpenRelay != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: ExpansionTile(
+                leading: Icon(
+                  Icons.developer_mode_rounded,
+                  color: theme.colorScheme.primary,
+                ),
+                title: Text(
+                  _locale.languageCode == 'ru'
+                      ? 'Для разработчиков'
+                      : 'Developer options',
+                ),
+                subtitle: Text(
+                  _locale.languageCode == 'ru'
+                      ? 'Диагностика сети и протокола'
+                      : 'Network and protocol diagnostics',
+                ),
+                children: [
+                  const Divider(height: 1),
                   ListTile(
-                    leading: Icon(
-                      Icons.wifi_tethering_rounded,
-                      color: theme.colorScheme.primary,
-                    ),
+                    leading: const Icon(Icons.wifi_tethering_rounded),
                     title: Text(l10n.settingsNostrRelay),
                     subtitle: Text(l10n.settingsNostrRelayHint),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: widget.onOpenRelay,
                   ),
-                if (widget.onOpenRelay != null && widget.onOpenGeo != null)
-                  const Divider(height: 1),
-                if (widget.onOpenGeo != null)
-                  ListTile(
-                    leading: Icon(
-                      Icons.my_location_rounded,
-                      color: theme.colorScheme.primary,
-                    ),
-                    title: Text(l10n.settingsGeoRadius),
-                    subtitle: Text(l10n.settingsGeoRadiusHint),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: widget.onOpenGeo,
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 24),
           Text(l10n.settingsChat, style: theme.textTheme.titleLarge),
           const SizedBox(height: 8),

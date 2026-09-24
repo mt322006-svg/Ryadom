@@ -2,23 +2,21 @@
 
 ## Purpose
 
-`Мы Рядом` is a mobile app that connects people who need help with people nearby who are willing to help.
+`Мы Рядом` соединяет человека, которому нужна небольшая помощь, с людьми поблизости, которые готовы помочь.
 
-It is built for fast, local, human-centered assistance.
+Цель — сделать локальную взаимопомощь быстрой, понятной и достаточно безопасной, чтобы она стала привычкой.
 
 ## Why it exists
 
-The founder builds `Мы Рядом` so that people **learn to help each other and become kinder**.
+Идея проекта проста: люди чаще помогают друг другу, когда заметить просьбу и откликнуться легко.
 
-Not as a slogan — as a habit: notice someone nearby, respond, complete something small together, leave with more trust in the people around you.
-
-Technology is only the excuse to practice that habit at human scale.
+Технология здесь не цель. Она только сокращает расстояние между «кому-то нужна помощь» и «я рядом».
 
 ## North star
 
 **Помогать — да. Зарабатывать на людях — нет.**
 
-The app should make nearby help faster and safer. It is not a business built on commissions, subscriptions, or turning helpers into gig workers.
+Проект не строится вокруг комиссий, подписок, платного продвижения запросов или превращения помощников в gig-workers.
 
 ## What Мы Рядом is
 
@@ -27,44 +25,37 @@ The app should make nearby help faster and safer. It is not a business built on 
 - calm
 - practical
 - human-first
+- open source
 
 ## What Мы Рядом is not
 
-- not a gig marketplace
-- not a generic social map
-- not a chat-first product
-- not a heavy service platform
-- not a monetization layer on top of human urgency
+- gig marketplace
+- generic social map
+- chat-first social network
+- payment platform
+- слой монетизации поверх чужой срочности
 
-## Open source intent
+## Open source
 
-The plan is to **polish the MVP first**, then release the project as **open source**.
+Исходный код проекта уже открыт под Apache-2.0.
 
-Why:
-- the protocol and product shape should stay inspectable and forkable
-- help infrastructure should not depend on one closed vendor
-- contributors should see the same product ethics in code and docs
-
-Until the public release: no hidden monetization hooks, no «we'll add fees later» architecture.
+Это важно, потому что:
+- протокол и правила приватности можно проверить
+- инфраструктура помощи не должна зависеть от одного закрытого поставщика
+- продуктовые обещания видны не только в тексте, но и в коде
 
 ## Core loop
 
-1. A person creates a help request.
-2. Nearby people see the request quickly.
-3. Someone responds.
-4. The request owner selects a helper.
-5. The task moves to completion.
-6. Rating stays lightweight and optional.
+1. Человек создаёт запрос.
+2. Люди рядом видят его.
+3. Кто-то откликается.
+4. Автор выбирает помощника.
+5. Координация переходит в приватный чат.
+6. Помощь завершается.
+7. Оценка остаётся лёгкой и необязательной.
 
 ## Product feeling
 
-The product should feel alive and fast, but not noisy.
+Приложение должно ощущаться живым, но не шумным; технологичным, но не требовать знания Nostr.
 
-It should feel:
-
-- trustworthy
-- simple
-- real-time
-- close to the user
-
-If something feels too complex for the first version, it probably does not belong there yet.
+Если для обычного действия пользователю нужно понимать relay, pubkey или event kind — протокол протёк в продуктовый интерфейс, и это надо исправлять.

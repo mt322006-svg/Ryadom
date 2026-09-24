@@ -6,8 +6,8 @@ import '../../geo/domain/geo_privacy.dart';
 import '../../requests/domain/help_request.dart';
 import '../domain/nostr_event.dart' as app_nostr;
 import '../domain/we_ryadom_nostr.dart';
-import 'nip44_chat_crypto.dart';
 import 'nostr_identity_store.dart';
+import 'ryadom_nip17_chat.dart';
 
 enum NostrConnectionStatus {
   starting,
@@ -173,8 +173,10 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
   final StreamController<app_nostr.NostrEventRecord> _eventsController =
       StreamController<app_nostr.NostrEventRecord>.broadcast();
 
-  StreamSubscription<NostrEvent>? _subscription;
-  NostrEventsStream? _subscriptionStream;
+  StreamSubscription<NostrEvent>? _publicSubscription;
+  StreamSubscription<NostrEvent>? _dmSubscription;
+  NostrEventsStream? _publicSubscriptionStream;
+  NostrEventsStream? _dmSubscriptionStream;
   NostrIdentity? _identity;
   int _sequence = 100000;
 
@@ -214,37 +216,59 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
       );
     }
 
-    final subscriptionResult = _nostr.subscribe(
+    final publicSubscriptionResult = _nostr.subscribe(
       NostrFilter(
         kinds: const [
           weRyadomRequestKind,
           weRyadomResponseKind,
           weRyadomRequestStateKind,
-          weRyadomChatMessageKind,
         ],
+        t: const ['we-ryadom'],
         since: DateTime.now().subtract(const Duration(days: 1)),
         limit: 500,
       ),
     );
+    final dmSubscriptionResult = _nostr.subscribe(
+      NostrFilter(
+        kinds: const [nostrNip17GiftWrapKind],
+        p: [identity.publicKey],
+        since: DateTime.now().subtract(const Duration(days: 2)),
+        limit: 500,
+      ),
+    );
 
-    subscriptionResult.fold(
+    publicSubscriptionResult.fold(
       (stream) {
-        _subscriptionStream = stream;
-        _subscription = stream.stream.listen(
+        _publicSubscriptionStream = stream;
+        _publicSubscription = stream.stream.listen(
+          (event) => unawaited(_handleRelayEvent(event)),
+        );
+      },
+      (_) {},
+    );
+    dmSubscriptionResult.fold(
+      (stream) {
+        _dmSubscriptionStream = stream;
+        _dmSubscription = stream.stream.listen(
           (event) => unawaited(_handleRelayEvent(event)),
         );
       },
       (_) {},
     );
 
+    final connected =
+        publicSubscriptionResult.isSuccess && dmSubscriptionResult.isSuccess;
+    final error = publicSubscriptionResult.failureOrNull?.message ??
+        dmSubscriptionResult.failureOrNull?.message;
+
     return NostrGatewayState(
       relayUrl: normalizedRelay,
-      isConnected: subscriptionResult.isSuccess,
+      isConnected: connected,
       isConnecting: false,
-      connectionStatus: subscriptionResult.isSuccess
+      connectionStatus: connected
           ? NostrConnectionStatus.online
           : NostrConnectionStatus.offline,
-      errorMessage: subscriptionResult.failureOrNull?.message,
+      errorMessage: error,
       publicKey: identity.publicKey,
       npub: identity.npub,
     );
@@ -364,50 +388,56 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
     required String message,
   }) async {
     final identity = _identity;
-    if (identity == null || !_nostr.isConnected) {
+    if (identity == null ||
+        !_nostr.isConnected ||
+        message.trim().isEmpty ||
+        message.length > 12000) {
       return null;
     }
 
-    final keyPair = NostrKeyPairs(private: identity.privateKey);
-    final messageId = 'msg-$requestId-${DateTime.now().millisecondsSinceEpoch}';
-    final plaintextEvent = WeRyadomNostr.chatMessageEvent(
-      messageId: messageId,
-      requestEventId: requestEventId,
-      requestAddress: '$weRyadomRequestKind:$requestAuthorPubkey:$requestId',
-      requestId: requestId,
+    final sender = NostrKeyPairs(private: identity.privateKey);
+    final rumor = RyadomNip17Chat.createRumor(
+      sender: sender,
       recipientPubkey: recipientPubkey,
+      requestId: requestId,
       message: message,
     );
 
-    final encryptedMessage = await Nip44ChatCrypto.encrypt(
-      plaintext: message,
-      senderPrivateKey: identity.privateKey,
+    final recipientWrap = await RyadomNip17Chat.wrapRumor(
+      rumor: rumor,
+      sender: sender,
       recipientPubkey: recipientPubkey,
     );
-
-    final wireEvent = WeRyadomNostr.chatMessageEvent(
-      messageId: messageId,
-      requestEventId: requestEventId,
-      requestAddress: '$weRyadomRequestKind:$requestAuthorPubkey:$requestId',
-      requestId: requestId,
-      recipientPubkey: recipientPubkey,
-      message: encryptedMessage,
-    );
-
-    final chatEvent = WeRyadomNostr.toRelayEvent(
-      wireEvent,
-      keyPairs: keyPair,
-    );
-
-    final result = await _nostr.publish(chatEvent);
-    if (result.isSuccess) {
-      _emitPublishedEvent(
-        WeRyadomNostr.toRelayEvent(plaintextEvent, keyPairs: keyPair),
-        fallbackId: messageId,
-      );
-      return messageId;
+    final recipientResult = await _nostr.publish(recipientWrap);
+    if (!recipientResult.isSuccess) {
+      return null;
     }
-    return null;
+
+    // NIP-17 keeps an encrypted sender copy too. It lets a restarted app
+    // rebuild chat history from the relay without persisting plaintext locally.
+    final senderWrap = await RyadomNip17Chat.wrapRumor(
+      rumor: rumor,
+      sender: sender,
+      recipientPubkey: identity.publicKey,
+    );
+    await _nostr.publish(senderWrap);
+
+    _emitAppEvent(
+      app_nostr.NostrEvent(
+        kind: weRyadomChatMessageKind,
+        content: {
+          'request_id': requestId,
+          'message': message,
+        },
+        tags: rumor.tags ?? const <List<String>>[],
+        pubkey: identity.publicKey,
+        createdAt: rumor.createdAt,
+      ),
+      fallbackId: rumor.id ??
+          'msg-$requestId-${DateTime.now().millisecondsSinceEpoch}',
+    );
+
+    return rumor.id;
   }
 
   @override
@@ -419,78 +449,42 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
 
   Future<void> _handleRelayEvent(NostrEvent relayEvent) async {
     final eventId = relayEvent.id;
-    if (eventId == null || eventId.isEmpty) {
-      return;
-    }
-
-    if (!relayEvent.isVerified()) {
+    if (eventId == null || eventId.isEmpty || !relayEvent.isVerified()) {
       return;
     }
 
     final identity = _identity;
-    if (relayEvent.kind == weRyadomChatMessageKind && identity != null) {
-      final recipient = _firstRelayTagValue(relayEvent, 'p');
-      final sender = relayEvent.pubkey;
-      final isIncoming = recipient == identity.publicKey;
-      final isOwnEcho = sender == identity.publicKey;
-
-      if (!isIncoming && !isOwnEcho) {
+    if (relayEvent.kind == nostrNip17GiftWrapKind) {
+      if (identity == null) {
+        return;
+      }
+      final decoded = await RyadomNip17Chat.unwrap(
+        giftWrap: relayEvent,
+        recipient: NostrKeyPairs(private: identity.privateKey),
+      );
+      if (decoded == null) {
         return;
       }
 
-      if (isOwnEcho) {
-        return;
-      }
-
-      final incomingEvent = WeRyadomNostr.fromRelayEvent(relayEvent);
-      if (isIncoming && WeRyadomNostr.isEncryptedChatEvent(incomingEvent)) {
-        final ciphertext = incomingEvent.content['message'] as String?;
-        if (ciphertext == null || ciphertext.isEmpty) {
-          return;
-        }
-
-        try {
-          final plaintext = await Nip44ChatCrypto.decrypt(
-            ciphertext: ciphertext,
-            recipientPrivateKey: identity.privateKey,
-            senderPubkey: sender,
-          );
-          _emitAppEvent(
-            app_nostr.NostrEvent(
-              kind: incomingEvent.kind,
-              content: {
-                'request_id': incomingEvent.content['request_id'],
-                'message': plaintext,
-              },
-              tags: incomingEvent.tags,
-              pubkey: incomingEvent.pubkey,
-              createdAt: incomingEvent.createdAt,
-              signature: incomingEvent.signature,
-            ),
-            fallbackId: eventId,
-          );
-          return;
-        } catch (_) {
-          return;
-        }
-      }
+      _emitAppEvent(
+        app_nostr.NostrEvent(
+          kind: weRyadomChatMessageKind,
+          content: {
+            'request_id': decoded.requestId,
+            'message': decoded.message,
+          },
+          tags: decoded.tags,
+          pubkey: decoded.senderPubkey,
+          createdAt: decoded.createdAt,
+        ),
+        fallbackId: decoded.id,
+      );
+      return;
     }
 
     _emitPublishedEvent(relayEvent, fallbackId: eventId);
   }
 
-  String? _firstRelayTagValue(NostrEvent relayEvent, String key) {
-    final tags = relayEvent.tags;
-    if (tags == null) {
-      return null;
-    }
-    for (final tag in tags) {
-      if (tag.length >= 2 && tag[0] == key) {
-        return tag[1];
-      }
-    }
-    return null;
-  }
 
   void _emitAppEvent(app_nostr.NostrEvent event, {required String fallbackId}) {
     _eventsController.add(
@@ -507,7 +501,10 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
     final eventId =
         relayId != null && relayId.isNotEmpty ? relayId : fallbackId;
 
-    final appEvent = WeRyadomNostr.fromRelayEvent(relayEvent);
+    final appEvent = WeRyadomNostr.tryFromRelayEvent(relayEvent);
+    if (appEvent == null) {
+      return;
+    }
     _eventsController.add(
       app_nostr.NostrEventRecord(
         id: eventId,
@@ -518,10 +515,14 @@ class LiveWeRyadomNostrGateway implements WeRyadomNostrGateway {
   }
 
   Future<void> _closeSubscription() async {
-    await _subscription?.cancel();
-    _subscription = null;
-    _subscriptionStream?.close();
-    _subscriptionStream = null;
+    await _publicSubscription?.cancel();
+    await _dmSubscription?.cancel();
+    _publicSubscription = null;
+    _dmSubscription = null;
+    _publicSubscriptionStream?.close();
+    _dmSubscriptionStream?.close();
+    _publicSubscriptionStream = null;
+    _dmSubscriptionStream = null;
   }
 
   String _areaBucketForRequest(HelpRequest request) {

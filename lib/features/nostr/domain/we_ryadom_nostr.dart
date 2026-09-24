@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dart_nostr/dart_nostr.dart' as nostr_sdk;
 
 import '../../requests/domain/help_request.dart';
+import '../data/ryadom_nostr_validator.dart';
 import 'nostr_event.dart';
 
 const weRyadomRequestKind = 31101;
@@ -175,24 +176,47 @@ class WeRyadomNostr {
     );
   }
 
-  static NostrEvent fromRelayEvent(nostr_sdk.NostrEvent relayEvent) {
-    Map<String, Object?> content = <String, Object?>{};
-    final rawContent = relayEvent.content ?? '';
-    if (rawContent.isNotEmpty) {
-      final decoded = jsonDecode(rawContent);
-      if (decoded is Map<String, dynamic>) {
-        content = decoded.cast<String, Object?>();
-      }
+  static NostrEvent? tryFromRelayEvent(nostr_sdk.NostrEvent relayEvent) {
+    if (!relayEvent.isVerified()) {
+      return null;
+    }
+    final kind = relayEvent.kind;
+    if (kind != weRyadomRequestKind &&
+        kind != weRyadomResponseKind &&
+        kind != weRyadomRequestStateKind) {
+      return null;
     }
 
-    return NostrEvent(
-      kind: relayEvent.kind ?? 0,
-      content: content,
-      tags: relayEvent.tags ?? const <List<String>>[],
-      pubkey: relayEvent.pubkey,
-      createdAt: relayEvent.createdAt,
-      signature: relayEvent.sig,
-    );
+    final rawContent = relayEvent.content ?? '';
+    if (rawContent.isEmpty || rawContent.length > 16384) {
+      return null;
+    }
+
+    try {
+      final decoded = jsonDecode(rawContent);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      final event = NostrEvent(
+        kind: kind!,
+        content: decoded.cast<String, Object?>(),
+        tags: relayEvent.tags ?? const <List<String>>[],
+        pubkey: relayEvent.pubkey,
+        createdAt: relayEvent.createdAt,
+        signature: relayEvent.sig,
+      );
+      return RyadomNostrValidator.isValidRemoteAppEvent(event) ? event : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static NostrEvent fromRelayEvent(nostr_sdk.NostrEvent relayEvent) {
+    final event = tryFromRelayEvent(relayEvent);
+    if (event == null) {
+      throw const FormatException('Invalid Мы Рядом relay event');
+    }
+    return event;
   }
 
   static String? firstTagValue(NostrEvent event, String key) {

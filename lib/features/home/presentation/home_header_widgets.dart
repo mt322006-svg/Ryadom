@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../../l10n/l10n_ext.dart';
 import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_buttons.dart';
-import '../../nostr/data/we_ryadom_nostr_gateway.dart';
 import 'home_models.dart';
 
 class HomeRadarHeader extends StatelessWidget {
@@ -11,11 +10,8 @@ class HomeRadarHeader extends StatelessWidget {
     super.key,
     required this.onCreateRequest,
     required this.onOpenSettings,
-    required this.onOpenNostrSettings,
     required this.onOpenGeoSettings,
     required this.onPickRadius,
-    required this.isNostrLoading,
-    required this.nostrStatus,
     required this.isLocationEnabled,
     required this.isLocationLoading,
     required this.locationLabel,
@@ -24,11 +20,8 @@ class HomeRadarHeader extends StatelessWidget {
 
   final VoidCallback onCreateRequest;
   final VoidCallback onOpenSettings;
-  final VoidCallback onOpenNostrSettings;
   final VoidCallback onOpenGeoSettings;
   final VoidCallback onPickRadius;
-  final bool isNostrLoading;
-  final NostrConnectionStatus nostrStatus;
   final bool isLocationEnabled;
   final bool isLocationLoading;
   final String locationLabel;
@@ -38,7 +31,6 @@ class HomeRadarHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = context.l10n;
-    final nostrLabel = l10n.nostrConnectionStatus(nostrStatus);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -98,18 +90,6 @@ class HomeRadarHeader extends StatelessWidget {
           spacing: 8,
           runSpacing: 8,
           children: [
-            HomeHeaderPill(
-              icon: isNostrLoading
-                  ? Icons.sync_rounded
-                  : nostrStatus == NostrConnectionStatus.online
-                  ? Icons.wifi_tethering_rounded
-                  : Icons.portable_wifi_off_rounded,
-              label: l10n.compactHeaderLabel(
-                nostrLabel,
-                fallback: l10n.headerConnection,
-              ),
-              onTap: onOpenNostrSettings,
-            ),
             HomeHeaderPill(
               icon: isLocationLoading
                   ? Icons.location_searching_rounded

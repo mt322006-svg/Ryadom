@@ -1,16 +1,21 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/l10n_ext.dart';
 import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_palette.dart';
+import '../../geo/domain/map_links.dart';
 import '../../nostr/data/we_ryadom_nostr_gateway.dart';
 import '../../nostr/domain/we_ryadom_nostr.dart';
 import '../../trust/data/report_store.dart';
 import '../../trust/domain/trust_guard.dart';
 import '../domain/chat_models.dart';
+import '../domain/shared_location_payload.dart';
+
+part 'chat_screen_widgets.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -40,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   late ChatPalette _palette;
   StreamSubscription? _chatSubscription;
   bool _sending = false;
+  bool _sharingLocation = false;
   _ChatDeliveryState _deliveryState = _ChatDeliveryState.online;
   bool _showAllQuickReplies = false;
   bool _hasDraft = false;
@@ -136,6 +142,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final theme = Theme.of(context);
     final canSend =
         widget.session.participantPubkey != null && !_sending && _hasDraft;
+    final canShareLocation = widget.session.request.isOwnRequest &&
+        widget.session.participantPubkey != null &&
+        !_sending;
     final quickReplies = _visibleQuickReplies(l10n);
 
     return Theme(
@@ -304,6 +313,10 @@ class _ChatScreenState extends State<ChatScreen> {
               isSending: _sending,
               waitingForPeer: widget.session.participantPubkey == null,
               onSend: () => _sendMessage(_messageController.text),
+              showLocationAction: widget.session.request.isOwnRequest,
+              canShareLocation: canShareLocation,
+              isSharingLocation: _sharingLocation,
+              onShareLocation: _shareExactLocation,
             ),
           ],
         ),
@@ -368,6 +381,149 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _shareExactLocation() async {
+    if (!widget.session.request.isOwnRequest ||
+        widget.session.participantPubkey == null ||
+        _sending) {
+      return;
+    }
+
+    final copy = _LocationCopy.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          icon: const Icon(Icons.location_on_outlined),
+          title: Text(copy.warningTitle),
+          content: Text(copy.warningBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(copy.cancel),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              icon: const Icon(Icons.near_me_outlined),
+              label: Text(copy.share),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _sharingLocation = true);
+    final position = await _captureExactPosition();
+    if (!mounted) {
+      return;
+    }
+    if (position == null) {
+      setState(() => _sharingLocation = false);
+      return;
+    }
+
+    final payload = SharedLocationPayload(
+      latitude: position.latitude,
+      longitude: position.longitude,
+    ).encode();
+
+    setState(() {
+      _sending = true;
+      _deliveryState = _ChatDeliveryState.sending;
+    });
+
+    final messageId = await widget.nostrGateway.publishChatMessage(
+      requestId: widget.session.request.id,
+      requestEventId: widget.session.requestEventId,
+      requestAuthorPubkey: widget.session.requestAuthorPubkey,
+      recipientPubkey: widget.session.participantPubkey!,
+      message: payload,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (messageId != null && !_messages.any((item) => item.id == messageId)) {
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            id: messageId,
+            authorName: context.l10n.chatYou,
+            text: payload,
+            timeLabel: context.l10n.formatClock(DateTime.now()),
+            isCurrentUser: true,
+          ),
+        );
+      });
+      _scheduleScrollToEnd();
+    }
+
+    setState(() {
+      _sending = false;
+      _sharingLocation = false;
+      _deliveryState = messageId != null
+          ? _ChatDeliveryState.delivered
+          : _ChatDeliveryState.error;
+    });
+
+    if (messageId == null) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.l10n.chatSendFailed),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<Position?> _captureExactPosition() async {
+    final copy = _LocationCopy.of(context);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _showLocationError(copy.locationServicesOff);
+        return null;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showLocationError(copy.locationPermissionDenied);
+        return null;
+      }
+
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      _showLocationError(copy.locationCaptureFailed);
+      return null;
+    }
+  }
+
+  void _showLocationError(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _handleRelayEvent(dynamic record) {
@@ -515,959 +671,3 @@ enum _ChatSafetyAction { report, block }
 enum _ChatDeliveryState { online, sending, delivered, error }
 
 enum _MessageDeliveryStatus { none, sending, sent, delivered, failed }
-
-class _MessengerAppBarTitle extends StatelessWidget {
-  const _MessengerAppBarTitle({
-    required this.name,
-    required this.subtitle,
-    required this.statusLabel,
-    required this.deliveryState,
-    required this.palette,
-  });
-
-  final String name;
-  final String subtitle;
-  final String statusLabel;
-  final _ChatDeliveryState deliveryState;
-  final _ChatPaletteData palette;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final initials = _initialsFor(name);
-    final isOnline = deliveryState != _ChatDeliveryState.error &&
-        deliveryState != _ChatDeliveryState.sending;
-
-    return Row(
-      children: [
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: palette.accent.withValues(alpha: 0.2),
-              child: Text(
-                initials,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: palette.accent,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: isOnline
-                      ? const Color(0xFF4CD964)
-                      : palette.muted,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: palette.background, width: 2),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: palette.onSurface,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '$subtitle · $statusLabel',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: palette.muted,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RequestContextBar extends StatelessWidget {
-  const _RequestContextBar({
-    required this.session,
-    required this.palette,
-    required this.l10n,
-  });
-
-  final HelpChatSession session;
-  final _ChatPaletteData palette;
-  final AppLocalizations l10n;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: palette.surface.withValues(alpha: 0.88),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: palette.border),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              Icon(Icons.campaign_outlined, size: 18, color: palette.accent),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  session.request.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: palette.onSurface,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.shield_outlined, size: 14, color: palette.muted),
-              const SizedBox(width: 4),
-              Text(
-                l10n.chatNoPrepay,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: palette.muted,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ChatWallpaper extends StatelessWidget {
-  const _ChatWallpaper({required this.palette});
-
-  final _ChatPaletteData palette;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            palette.background,
-            Color.lerp(palette.background, palette.surface, 0.35)!,
-          ],
-        ),
-      ),
-      child: CustomPaint(
-        painter: _ChatDotsPainter(
-          dotColor: palette.border.withValues(alpha: 0.35),
-        ),
-        child: const SizedBox.expand(),
-      ),
-    );
-  }
-}
-
-class _ChatDotsPainter extends CustomPainter {
-  _ChatDotsPainter({required this.dotColor});
-
-  final Color dotColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = dotColor;
-    const step = 28.0;
-    for (var y = 0.0; y < size.height; y += step) {
-      for (var x = 0.0; x < size.width; x += step) {
-        canvas.drawCircle(Offset(x + 6, y + 6), 1.2, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ChatDotsPainter oldDelegate) {
-    return oldDelegate.dotColor != dotColor;
-  }
-}
-
-class _ChatDaySeparator extends StatelessWidget {
-  const _ChatDaySeparator({required this.label, required this.palette});
-
-  final String label;
-  final _ChatPaletteData palette;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: palette.surface.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: palette.border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: palette.muted,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ChatEmptyState extends StatelessWidget {
-  const _ChatEmptyState({required this.palette, required this.l10n});
-
-  final _ChatPaletteData palette;
-  final AppLocalizations l10n;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 36),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: palette.surface,
-                shape: BoxShape.circle,
-                border: Border.all(color: palette.border),
-              ),
-              child: Icon(
-                Icons.forum_outlined,
-                size: 34,
-                color: palette.accent,
-              ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              l10n.chatStartMessage,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: palette.onSurface,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              l10n.chatStartHint,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: palette.muted,
-                height: 1.35,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MessengerBubbleRow extends StatelessWidget {
-  const _MessengerBubbleRow({
-    required this.message,
-    required this.palette,
-    required this.maxWidth,
-    required this.showAuthor,
-    required this.isTail,
-    required this.deliveryStatus,
-  });
-
-  final ChatMessage message;
-  final _ChatPaletteData palette;
-  final double maxWidth;
-  final bool showAuthor;
-  final bool isTail;
-  final _MessageDeliveryStatus deliveryStatus;
-
-  @override
-  Widget build(BuildContext context) {
-    final isOutgoing = message.isCurrentUser;
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisAlignment:
-          isOutgoing ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: [
-        if (!isOutgoing) ...[
-          SizedBox(
-            width: 36,
-            child: isTail
-                ? CircleAvatar(
-                    radius: 16,
-                    backgroundColor: palette.accent.withValues(alpha: 0.18),
-                    child: Text(
-                      _initialsFor(message.authorName),
-                      style: TextStyle(
-                        color: palette.accent,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-          const SizedBox(width: 6),
-        ],
-        Flexible(
-          child: _MessengerBubble(
-            message: message,
-            palette: palette,
-            maxWidth: maxWidth,
-            showAuthor: showAuthor,
-            isTail: isTail,
-            deliveryStatus: deliveryStatus,
-          ),
-        ),
-        if (isOutgoing) const SizedBox(width: 4),
-      ],
-    );
-  }
-}
-
-class _MessengerBubble extends StatelessWidget {
-  const _MessengerBubble({
-    required this.message,
-    required this.palette,
-    required this.maxWidth,
-    required this.showAuthor,
-    required this.isTail,
-    required this.deliveryStatus,
-  });
-
-  final ChatMessage message;
-  final _ChatPaletteData palette;
-  final double maxWidth;
-  final bool showAuthor;
-  final bool isTail;
-  final _MessageDeliveryStatus deliveryStatus;
-
-  @override
-  Widget build(BuildContext context) {
-    final isOutgoing = message.isCurrentUser;
-    final bubbleColor = isOutgoing ? palette.accent : palette.surface;
-    final textColor = isOutgoing ? palette.onAccent : palette.onSurface;
-    final metaColor = isOutgoing
-        ? palette.onAccent.withValues(alpha: 0.78)
-        : palette.muted;
-    const corner = 18.0;
-    const groupedCorner = 12.0;
-    const tailCorner = 5.0;
-
-    return Align(
-      alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(isOutgoing ? corner : groupedCorner),
-              topRight: Radius.circular(isOutgoing ? groupedCorner : corner),
-              bottomLeft: Radius.circular(
-                isOutgoing
-                    ? (isTail ? tailCorner : groupedCorner)
-                    : (isTail ? tailCorner : groupedCorner),
-              ),
-              bottomRight: Radius.circular(
-                isOutgoing
-                    ? (isTail ? tailCorner : groupedCorner)
-                    : (isTail ? tailCorner : groupedCorner),
-              ),
-            ),
-            border: isOutgoing
-                ? null
-                : Border.all(color: palette.border.withValues(alpha: 0.9)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isOutgoing ? 0.1 : 0.06),
-                blurRadius: isTail ? 10 : 6,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(12, showAuthor ? 8 : 7, 10, 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (showAuthor) ...[
-                  Text(
-                    message.authorName,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: palette.accent,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                ],
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.end,
-                  children: [
-                    Text(
-                      message.text,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: textColor,
-                        height: 1.32,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          message.timeLabel,
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: metaColor,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (isOutgoing) ...[
-                          const SizedBox(width: 3),
-                          _DeliveryTicks(
-                            status: deliveryStatus,
-                            color: metaColor,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DeliveryTicks extends StatelessWidget {
-  const _DeliveryTicks({required this.status, required this.color});
-
-  final _MessageDeliveryStatus status;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return switch (status) {
-      _MessageDeliveryStatus.sending => Icon(
-        Icons.schedule_rounded,
-        size: 14,
-        color: color,
-      ),
-      _MessageDeliveryStatus.failed => Icon(
-        Icons.error_outline_rounded,
-        size: 14,
-        color: color,
-      ),
-      _MessageDeliveryStatus.delivered => Icon(
-        Icons.done_all_rounded,
-        size: 15,
-        color: color,
-      ),
-      _ => Icon(Icons.done_rounded, size: 14, color: color),
-    };
-  }
-}
-
-class _MessengerComposer extends StatelessWidget {
-  const _MessengerComposer({
-    required this.palette,
-    required this.theme,
-    required this.l10n,
-    required this.controller,
-    required this.quickReplies,
-    required this.hasHiddenQuickReplies,
-    required this.showAllQuickReplies,
-    required this.onToggleQuickReplies,
-    required this.onQuickReply,
-    required this.canSend,
-    required this.isSending,
-    required this.waitingForPeer,
-    required this.onSend,
-  });
-
-  final _ChatPaletteData palette;
-  final ThemeData theme;
-  final AppLocalizations l10n;
-  final TextEditingController controller;
-  final List<String> quickReplies;
-  final bool hasHiddenQuickReplies;
-  final bool showAllQuickReplies;
-  final VoidCallback onToggleQuickReplies;
-  final ValueChanged<String> onQuickReply;
-  final bool canSend;
-  final bool isSending;
-  final bool waitingForPeer;
-  final VoidCallback onSend;
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: palette.inputSurface.withValues(alpha: 0.98),
-        border: Border(top: BorderSide(color: palette.border)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 12,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + bottomInset),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (quickReplies.isNotEmpty)
-                SizedBox(
-                  height: 36,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      for (final reply in quickReplies)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: _QuickReplyChip(
-                            label: reply,
-                            palette: palette,
-                            onTap: () => onQuickReply(reply),
-                          ),
-                        ),
-                      if (hasHiddenQuickReplies)
-                        _QuickReplyChip(
-                          label: showAllQuickReplies ? l10n.chatLess : l10n.chatMore,
-                          palette: palette,
-                          muted: true,
-                          onTap: onToggleQuickReplies,
-                        ),
-                    ],
-                  ),
-                ),
-              if (quickReplies.isNotEmpty) const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  IconButton(
-                    onPressed: null,
-                    icon: Icon(Icons.add_rounded, color: palette.muted),
-                    tooltip: l10n.chatSoon,
-                  ),
-                  Expanded(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: palette.surface,
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: palette.border),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 2,
-                        ),
-                        child: TextField(
-                          controller: controller,
-                          minLines: 1,
-                          maxLines: 4,
-                          textCapitalization: TextCapitalization.sentences,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: canSend ? (_) => onSend() : null,
-                          decoration: InputDecoration(
-                            hintText: waitingForPeer
-                                ? l10n.chatWaitingPeer
-                                : l10n.chatMessageHint,
-                            border: InputBorder.none,
-                            isCollapsed: true,
-                            hintStyle: theme.textTheme.bodyLarge?.copyWith(
-                              color: palette.muted,
-                            ),
-                          ),
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: palette.onSurface,
-                            height: 1.3,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _SendButton(
-                    palette: palette,
-                    active: canSend,
-                    busy: isSending,
-                    onPressed: canSend ? onSend : null,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickReplyChip extends StatelessWidget {
-  const _QuickReplyChip({
-    required this.label,
-    required this.palette,
-    required this.onTap,
-    this.muted = false,
-  });
-
-  final String label;
-  final _ChatPaletteData palette;
-  final VoidCallback onTap;
-  final bool muted;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: muted ? palette.surface : palette.quickAction,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: muted ? palette.border : palette.quickAction,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: muted ? palette.onSurface : palette.quickActionText,
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SendButton extends StatelessWidget {
-  const _SendButton({
-    required this.palette,
-    required this.active,
-    required this.busy,
-    required this.onPressed,
-  });
-
-  final _ChatPaletteData palette;
-  final bool active;
-  final bool busy;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? palette.accent : palette.border;
-
-    return Material(
-      color: color,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onPressed,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 46,
-          height: 46,
-          child: Center(
-            child: busy
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: palette.onAccent,
-                    ),
-                  )
-                : Icon(
-                    active ? Icons.send_rounded : Icons.mic_none_rounded,
-                    color: active ? palette.onAccent : palette.muted,
-                    size: 22,
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PaletteRow extends StatelessWidget {
-  const _PaletteRow({
-    required this.palette,
-    required this.selected,
-    required this.data,
-    required this.l10n,
-    required this.onTap,
-  });
-
-  final ChatPalette palette;
-  final bool selected;
-  final _ChatPaletteData data;
-  final AppLocalizations l10n;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: data.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: selected ? data.accent : data.border,
-              width: selected ? 1.4 : 1,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _paletteTitle(palette, l10n),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleLarge?.copyWith(color: data.onSurface),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _paletteDescription(palette, l10n),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(color: data.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _ColorDot(data.accent),
-                    const SizedBox(width: 6),
-                    _ColorDot(data.surface),
-                    const SizedBox(width: 6),
-                    _ColorDot(data.quickAction),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ColorDot extends StatelessWidget {
-  const _ColorDot(this.color);
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 16,
-      height: 16,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-      ),
-    );
-  }
-}
-
-class _ChatPaletteData {
-  const _ChatPaletteData({
-    required this.background,
-    required this.surface,
-    required this.inputSurface,
-    required this.tagSurface,
-    required this.accent,
-    required this.onAccent,
-    required this.onSurface,
-    required this.muted,
-    required this.border,
-    required this.quickAction,
-    required this.quickActionText,
-  });
-
-  final Color background;
-  final Color surface;
-  final Color inputSurface;
-  final Color tagSurface;
-  final Color accent;
-  final Color onAccent;
-  final Color onSurface;
-  final Color muted;
-  final Color border;
-  final Color quickAction;
-  final Color quickActionText;
-}
-
-_ChatPaletteData _chatPaletteFromRyadom(RyadomPalette palette) {
-  return _ChatPaletteData(
-    background: palette.background,
-    surface: palette.surface,
-    inputSurface: palette.inputSurface,
-    tagSurface: palette.tagSurface,
-    accent: palette.accent,
-    onAccent: palette.onAccent,
-    onSurface: palette.onSurface,
-    muted: palette.muted,
-    border: palette.border,
-    quickAction: palette.tagSurface,
-    quickActionText: palette.secondary,
-  );
-}
-
-_ChatPaletteData _paletteData(ChatPalette palette, Brightness brightness) {
-  final isDark = brightness == Brightness.dark;
-
-  return switch (palette) {
-    ChatPalette.calm => _chatPaletteFromRyadom(
-      brightness == Brightness.dark
-          ? RyadomPalette.classic
-          : RyadomPalette.day,
-    ),
-    ChatPalette.night => _chatPaletteFromRyadom(RyadomPalette.night),
-    ChatPalette.warm => _ChatPaletteData(
-      background: isDark ? const Color(0xFF19100D) : const Color(0xFFF9F0E7),
-      surface: isDark ? const Color(0xFF2A1D18) : const Color(0xFFFFFBF6),
-      inputSurface: isDark ? const Color(0xFF32231D) : const Color(0xFFFFF5EB),
-      tagSurface: isDark ? const Color(0xFF3A2920) : const Color(0xFFF7E7D6),
-      accent: isDark ? const Color(0xFFFFB07D) : const Color(0xFFC97C5D),
-      onAccent: isDark ? const Color(0xFF382012) : Colors.white,
-      onSurface: isDark ? const Color(0xFFF8EBE2) : const Color(0xFF382219),
-      muted: isDark ? const Color(0xFFD0B7AA) : const Color(0xFF886A5D),
-      border: isDark ? const Color(0xFF4A342A) : const Color(0xFFE9D4C6),
-      quickAction: isDark ? const Color(0xFF4B3427) : const Color(0xFFF7E3D8),
-      quickActionText: isDark
-          ? const Color(0xFFFFD8C0)
-          : const Color(0xFF8D5239),
-    ),
-    ChatPalette.cyberpunk => _chatPaletteFromRyadom(RyadomPalette.cyberpunk),
-  };
-}
-
-String _paletteTitle(ChatPalette palette, AppLocalizations l10n) {
-  return switch (palette) {
-    ChatPalette.calm => l10n.chatPaletteCalmTitle,
-    ChatPalette.night => l10n.chatPaletteNightTitle,
-    ChatPalette.warm => l10n.chatPaletteWarmTitle,
-    ChatPalette.cyberpunk => l10n.chatPaletteCyberpunkTitle,
-  };
-}
-
-String _paletteDescription(ChatPalette palette, AppLocalizations l10n) {
-  return switch (palette) {
-    ChatPalette.calm => l10n.chatPaletteCalm,
-    ChatPalette.night => l10n.chatPaletteNight,
-    ChatPalette.warm => l10n.chatPaletteWarm,
-    ChatPalette.cyberpunk => l10n.chatPaletteCyberpunk,
-  };
-}
-
-List<String> _quickReplies(HelpChatSession session, AppLocalizations l10n) {
-  if (session.request.isOwnRequest) {
-    return [
-      l10n.chatQuickReplyHelper1,
-      l10n.chatQuickReplyHelper2,
-      l10n.chatQuickReplyHelper3,
-      l10n.chatQuickReplyHelper4,
-    ];
-  }
-
-  return [
-    l10n.chatQuickReplyResponder1,
-    l10n.chatQuickReplyResponder2,
-    l10n.chatQuickReplyResponder3,
-    l10n.chatQuickReplyResponder4,
-  ];
-}
-
-String _initialsFor(String name) {
-  final parts = name.trim().split(RegExp(r'\s+'));
-  if (parts.isEmpty || parts.first.isEmpty) {
-    return '?';
-  }
-  String head(String value, int count) {
-    if (value.length <= count) {
-      return value;
-    }
-    return value.substring(0, count);
-  }
-
-  if (parts.length == 1) {
-    return head(parts.first, 2).toUpperCase();
-  }
-  return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
-}

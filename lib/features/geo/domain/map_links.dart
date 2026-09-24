@@ -29,10 +29,7 @@ class MapLinks {
 
   static Future<bool> open(Uri uri) async {
     try {
-      if (await canLaunchUrl(uri)) {
-        return launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-      return launchUrl(uri, mode: LaunchMode.externalApplication);
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
       return false;
     }

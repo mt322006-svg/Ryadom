@@ -23,6 +23,7 @@ class LocalNostrRequestStore {
   final Set<String> _respondedRequestIds = {};
   final Map<String, String> _chosenHelperByRequestId = {};
   final bool _persistEnabled;
+  Future<void> _persistQueue = Future<void>.value();
   int _sequence = 0;
   int _responseSerial = 0;
   int _updateSerial = 0;
@@ -41,7 +42,24 @@ class LocalNostrRequestStore {
     if (snapshot == null) {
       return LocalNostrRequestStore();
     }
-    return LocalNostrRequestStore._fromSnapshot(snapshot);
+
+    // Older builds persisted decrypted chat payloads in SharedPreferences.
+    // Strip them immediately on upgrade. Chat history is rebuilt from
+    // encrypted NIP-17 sender/recipient gift wraps instead.
+    final sanitizedEvents = snapshot.events
+        .where((item) => item.event.kind != weRyadomChatMessageKind)
+        .toList(growable: false);
+    final sanitized = RequestStoreSnapshot(
+      events: sanitizedEvents,
+      ownRequestIds: snapshot.ownRequestIds,
+      respondedRequestIds: snapshot.respondedRequestIds,
+      chosenHelperByRequestId: snapshot.chosenHelperByRequestId,
+      sequence: snapshot.sequence,
+    );
+    if (sanitizedEvents.length != snapshot.events.length) {
+      await LocalNostrRequestPersistence.save(sanitized);
+    }
+    return LocalNostrRequestStore._fromSnapshot(sanitized);
   }
 
   /// Запросы других людей (не «Мои»).
@@ -64,6 +82,11 @@ class LocalNostrRequestStore {
   }
 
   bool _isWeRyadomEvent(NostrEvent event) {
+    // Chat events are internal, already-unwrapped NIP-17 messages emitted by
+    // the gateway. They never exist on the public relay as kind 31104.
+    if (event.kind == weRyadomChatMessageKind) {
+      return true;
+    }
     for (final tag in event.tags) {
       if (tag.length >= 2 && tag[0] == 't' && tag[1] == 'we-ryadom') {
         return true;
@@ -472,13 +495,22 @@ class LocalNostrRequestStore {
     if (!_persistEnabled) {
       return;
     }
-    unawaited(_persistNow());
+    _persistQueue = _persistQueue
+        .then((_) => _persistNow())
+        .catchError((_) {
+          // Persistence must not break the live help flow. The next mutation
+          // will enqueue another complete snapshot.
+        });
   }
 
   Future<void> _persistNow() async {
     await LocalNostrRequestPersistence.save(
       RequestStoreSnapshot(
-        events: List<NostrEventRecord>.from(_events),
+        // Never write decrypted private chat (including an exact shared
+        // location payload) to SharedPreferences.
+        events: _events
+            .where((item) => item.event.kind != weRyadomChatMessageKind)
+            .toList(growable: false),
         ownRequestIds: Set<String>.from(_ownRequestIds),
         respondedRequestIds: Set<String>.from(_respondedRequestIds),
         chosenHelperByRequestId: Map<String, String>.from(
