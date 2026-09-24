@@ -71,6 +71,11 @@ Public request data should not show:
 - exact address
 - apartment number
 - exact pin on a map
+- exact latitude / longitude
+
+After a helper is selected, the request owner may deliberately share a fresh
+exact point inside the encrypted NIP-17 chat. This requires a separate warning
+and confirmation; it is never copied back into the public request.
 
 ### Keep contact inside the app first
 
@@ -182,6 +187,8 @@ Chat should help people coordinate, not disappear into the void.
 MVP chat rules:
 
 - keep chat tied to a конкретная ситуация помощи
+- transport private coordination through NIP-17/NIP-59 gift wraps
+- do not persist decrypted chat or exact-location payloads in SharedPreferences
 - show simple status like `на связи`, `в пути`, `завершено`
 - allow reporting from chat
 - discourage immediate off-platform contact
