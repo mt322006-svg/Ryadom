@@ -964,6 +964,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _showCompletionThanks(HelpRequest request) async {
+    if (!mounted) {
+      return;
+    }
+    final isRussian = Localizations.localeOf(context).languageCode == 'ru';
+    final stars = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        final l10n = dialogContext.l10n;
+        return AlertDialog(
+          icon: Icon(
+            Icons.volunteer_activism_rounded,
+            color: theme.colorScheme.primary,
+          ),
+          title: Text(isRussian ? 'Спасибо, что помогли друг другу' : 'Thanks for helping each other'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                isRussian
+                    ? 'Запрос завершён. Оценка необязательна, но помогает понять, что помощь состоялась.'
+                    : 'The request is complete. Rating is optional, but it helps confirm that the help happened.',
+              ),
+              const SizedBox(height: 16),
+              Text(l10n.rateHelpTitle, style: theme.textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var value = 1; value <= 5; value++)
+                    IconButton(
+                      tooltip: l10n.rateStarsTooltip(value),
+                      onPressed: () => Navigator.of(dialogContext).pop(value),
+                      icon: const Icon(Icons.star_rounded),
+                      color: const Color(0xFFE8B84A),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(isRussian ? 'Не сейчас' : 'Not now'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (stars != null && mounted) {
+      await _rateRequest(_requestById(request.id) ?? request, stars);
+    }
+  }
+
   Future<void> _cancelRequest(HelpRequest request) async {
     if (!RequestLifecycle.canCancel(request)) {
       return;
@@ -1239,12 +1295,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       }
                       actionInFlight = true;
                       refreshSheet();
-                      await _markRequestCompleted(
-                        _requestById(fresh.id) ?? fresh,
-                      );
+                      final completed = _requestById(fresh.id) ?? fresh;
+                      await _markRequestCompleted(completed);
                       actionInFlight = false;
                       if (sheetContext.mounted) {
                         Navigator.of(sheetContext).pop();
+                      }
+                      if (mounted) {
+                        await _showCompletionThanks(
+                          _requestById(fresh.id) ?? completed,
+                        );
                       }
                     }
                   : null,
