@@ -1319,7 +1319,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openOwnRequest(HelpRequest request) async {
+    if (request.status == RequestStatus.completed ||
+        request.status == RequestStatus.rated ||
+        request.status == RequestStatus.cancelled) {
+      await _openRequestDetails(request);
+      return;
+    }
+    await _openRequestChat(request);
+  }
+
   String _ownRequestCta(HelpRequest request, AppLocalizations l10n) {
+    if (request.status == RequestStatus.completed) {
+      return l10n.rateHelpTitle;
+    }
+    if (request.status == RequestStatus.rated ||
+        request.status == RequestStatus.cancelled) {
+      return l10n.statusLabel(request.status);
+    }
     if (request.responseCount == 0) {
       return l10n.waitingResponses;
     }
@@ -1552,7 +1569,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               relayState:
                   _requestRelayStates[request.id] ?? RequestRelayState.localOnly,
               actionLabel: _ownRequestCta(request, l10n),
-              onTap: () => _openRequestChat(request),
+              onTap: () => _openOwnRequest(request),
             ),
           ),
         const SizedBox(height: 16),
@@ -1595,7 +1612,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               relayState:
                   _requestRelayStates[request.id] ?? RequestRelayState.localOnly,
               actionLabel: _ownRequestCta(request, l10n),
-              onTap: () => _openRequestChat(request),
+              onTap: () => _openOwnRequest(request),
             ),
           ),
         const SizedBox(height: 24),
@@ -1639,40 +1656,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    Icons.wifi_tethering_rounded,
+                    _nostrStatus == NostrConnectionStatus.online
+                        ? Icons.cloud_done_outlined
+                        : Icons.cloud_off_outlined,
                     color: theme.colorScheme.primary,
                   ),
-                  title: Text(l10n.profileNostr),
+                  title: Text(l10n.headerConnection),
                   subtitle: Text(
                     _nostrError ?? l10n.compactNostrStatus(_nostrStatus),
                   ),
-                  trailing: TextButton(
-                    onPressed: _openNostrSettings,
-                    child: Text(l10n.profileRelay),
-                  ),
                 ),
-                if (_npub != null) ...[
-                  const Divider(),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('npub'),
-                    subtitle: Text(shortNpub(_npub!)),
-                    trailing: IconButton(
-                      onPressed: () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        final copiedMessage = l10n.nostrNpubCopied;
-                        await Clipboard.setData(ClipboardData(text: _npub!));
-                        if (!context.mounted) {
-                          return;
-                        }
-                        messenger.showSnackBar(
-                          SnackBar(content: Text(copiedMessage)),
-                        );
-                      },
-                      icon: const Icon(Icons.copy_rounded),
-                    ),
-                  ),
-                ],
                 const Divider(),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
