@@ -1383,7 +1383,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (request.status == RequestStatus.completed ||
         request.status == RequestStatus.rated ||
         request.status == RequestStatus.cancelled) {
-      await _openRequestDetails(request);
+      _openRequestDetails(request);
       return;
     }
     await _openRequestChat(request);
