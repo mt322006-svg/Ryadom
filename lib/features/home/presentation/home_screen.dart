@@ -1583,7 +1583,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         if (visibleRequests.isEmpty)
-          _EmptyActivityCard(filter: _selectedFilter)
+          _EmptyActivityCard(
+            filter: _selectedFilter,
+            onCreateRequest: _openRequestCreation,
+            onChangeRadius: _pickRadius,
+          )
         else
           ...visibleRequests
               .take(4)
@@ -1621,7 +1625,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         if (ownRequests.isEmpty)
-          const _EmptyActivityCard.myRequests()
+          _EmptyActivityCard.myRequests(
+            onCreateRequest: _openRequestCreation,
+          )
         else
           ...ownRequests.map(
             (request) => _OwnRequestCard(
@@ -1664,7 +1670,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         if (ownRequests.isEmpty)
-          const _EmptyActivityCard.myRequests()
+          _EmptyActivityCard.myRequests(
+            onCreateRequest: _openRequestCreation,
+          )
         else
           ...ownRequests.map(
             (request) => _OwnRequestCard(
@@ -1682,7 +1690,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         if (nearbyRequests.isEmpty)
-          const _EmptyActivityCard(filter: RadarFilter.all)
+          _EmptyActivityCard(
+            filter: RadarFilter.all,
+            onCreateRequest: _openRequestCreation,
+            onChangeRadius: _pickRadius,
+          )
         else
           ...nearbyRequests.map(
             (request) => _ActivityRow(
