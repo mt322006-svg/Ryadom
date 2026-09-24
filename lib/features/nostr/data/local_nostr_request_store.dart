@@ -23,6 +23,7 @@ class LocalNostrRequestStore {
   final Set<String> _respondedRequestIds = {};
   final Map<String, String> _chosenHelperByRequestId = {};
   final bool _persistEnabled;
+  Future<void> _persistQueue = Future<void>.value();
   int _sequence = 0;
   int _responseSerial = 0;
   int _updateSerial = 0;
@@ -494,7 +495,12 @@ class LocalNostrRequestStore {
     if (!_persistEnabled) {
       return;
     }
-    unawaited(_persistNow());
+    _persistQueue = _persistQueue
+        .then((_) => _persistNow())
+        .catchError((_) {
+          // Persistence must not break the live help flow. The next mutation
+          // will enqueue another complete snapshot.
+        });
   }
 
   Future<void> _persistNow() async {
