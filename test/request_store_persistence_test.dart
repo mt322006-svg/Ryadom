@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ryadom/features/nostr/data/local_nostr_request_persistence.dart';
+import 'package:ryadom/features/nostr/data/local_nostr_request_store.dart';
 import 'package:ryadom/features/nostr/data/nostr_event_codec.dart';
 import 'package:ryadom/features/nostr/domain/nostr_event.dart';
 import 'package:ryadom/features/nostr/domain/we_ryadom_nostr.dart';
@@ -44,4 +45,39 @@ void main() {
     expect(loaded.events.first.id, 'evt-1');
     expect(loaded.events.first.event.kind, weRyadomRequestKind);
   });
+
+  test('upgrade removes decrypted chat from persisted snapshot', () async {
+    final chat = NostrEventRecord(
+      id: 'chat-1',
+      sequence: 1,
+      event: NostrEvent(
+        kind: weRyadomChatMessageKind,
+        content: const {
+          'request_id': 'req-private',
+          'message':
+              '{"type":"ryadom.location.v1","latitude":55.1,"longitude":37.2}',
+        },
+        tags: const [
+          ['p', 'peer'],
+        ],
+        pubkey: 'sender',
+      ),
+    );
+    await LocalNostrRequestPersistence.save(
+      RequestStoreSnapshot(
+        events: [chat],
+        ownRequestIds: const {},
+        respondedRequestIds: const {},
+        chosenHelperByRequestId: const {},
+        sequence: 2,
+      ),
+    );
+
+    await LocalNostrRequestStore.open();
+    final sanitized = await LocalNostrRequestPersistence.load();
+
+    expect(sanitized, isNotNull);
+    expect(sanitized!.events, isEmpty);
+  });
+
 }
