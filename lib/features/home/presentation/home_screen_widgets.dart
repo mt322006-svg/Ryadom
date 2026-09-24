@@ -525,14 +525,22 @@ class _SafetyNoteCard extends StatelessWidget {
 }
 
 class _EmptyActivityCard extends StatelessWidget {
-  const _EmptyActivityCard({required this.filter}) : forOwnRequests = false;
+  const _EmptyActivityCard({
+    required this.filter,
+    this.onCreateRequest,
+    this.onChangeRadius,
+  }) : forOwnRequests = false;
 
-  const _EmptyActivityCard.myRequests()
-      : filter = RadarFilter.requests,
+  const _EmptyActivityCard.myRequests({
+    this.onCreateRequest,
+  })  : filter = RadarFilter.requests,
+        onChangeRadius = null,
         forOwnRequests = true;
 
   final RadarFilter filter;
   final bool forOwnRequests;
+  final VoidCallback? onCreateRequest;
+  final VoidCallback? onChangeRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -568,30 +576,58 @@ class _EmptyActivityCard extends StatelessWidget {
             ),
           };
 
+    final isRussian = Localizations.localeOf(context).languageCode == 'ru';
+
     return RyadomSurfaceCard(
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: accent),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: accent),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 6),
+                    Text(body, style: theme.textTheme.bodyMedium),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          if (onCreateRequest != null || onChangeRadius != null) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Text(title, style: theme.textTheme.titleLarge),
-                const SizedBox(height: 6),
-                Text(body, style: theme.textTheme.bodyMedium),
+                if (onChangeRadius != null)
+                  TextButton.icon(
+                    onPressed: onChangeRadius,
+                    icon: const Icon(Icons.radar_rounded),
+                    label: Text(isRussian ? 'Изменить радиус' : 'Change radius'),
+                  ),
+                if (onCreateRequest != null)
+                  FilledButton.icon(
+                    onPressed: onCreateRequest,
+                    icon: const Icon(Icons.add_rounded),
+                    label: Text(isRussian ? 'Нужна помощь' : 'Ask for help'),
+                  ),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );
