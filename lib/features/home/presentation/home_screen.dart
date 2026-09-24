@@ -1458,13 +1458,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         HomeRadarHeader(
           onCreateRequest: _openRequestCreation,
           onOpenSettings: _openSettings,
-          onOpenNostrSettings: _openNostrSettings,
           onOpenGeoSettings: _openGeoSettings,
           onPickRadius: _pickRadius,
-          isNostrLoading: _loadingNostr,
-          nostrStatus: _loadingNostr
-              ? NostrConnectionStatus.connecting
-              : _nostrStatus,
           isLocationEnabled: _locationEnabled,
           isLocationLoading: _loadingLocation,
           locationLabel: _geoStatusLabel(l10n),
