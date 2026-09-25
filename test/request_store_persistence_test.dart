@@ -80,4 +80,90 @@ void main() {
     expect(sanitized!.events, isEmpty);
   });
 
+  test('completion purges exact location from in-memory chat', () {
+    const request = HelpRequest(
+      id: 'req-location',
+      title: 'Нужна помощь',
+      description: 'Тест',
+      compensation: RequestCompensation.free,
+      areaLabel: 'Рядом',
+      timeLabel: 'Сейчас',
+      urgency: RequestUrgency.normal,
+      status: RequestStatus.visible,
+      isOwnRequest: true,
+    );
+
+    final store = LocalNostrRequestStore.testOnly();
+    store.installRequestForTests(
+      request,
+      isOwn: true,
+      authorPubkey: 'owner',
+    );
+
+    store.ingestEventRecord(
+      NostrEventRecord(
+        id: 'chat-location',
+        sequence: 10,
+        event: NostrEvent(
+          kind: weRyadomChatMessageKind,
+          content: const {
+            'request_id': 'req-location',
+            'message':
+                '{"type":"ryadom.location.v1","latitude":55.1,"longitude":37.2}',
+          },
+          tags: const [
+            ['p', 'helper'],
+          ],
+          pubkey: 'owner',
+        ),
+      ),
+      currentPubkey: 'owner',
+    );
+    store.ingestEventRecord(
+      NostrEventRecord(
+        id: 'chat-text',
+        sequence: 11,
+        event: const NostrEvent(
+          kind: weRyadomChatMessageKind,
+          content: {
+            'request_id': 'req-location',
+            'message': 'Подхожу через пять минут',
+          },
+          tags: [
+            ['p', 'helper'],
+          ],
+          pubkey: 'owner',
+        ),
+      ),
+      currentPubkey: 'owner',
+    );
+
+    expect(
+      store.chatMessagesFor(
+        requestId: 'req-location',
+        currentPubkey: 'owner',
+        participantName: 'Помощник',
+        requestAuthorPubkey: 'owner',
+        activeParticipantPubkey: 'helper',
+      ),
+      hasLength(2),
+    );
+
+    store.updateRequestStatus(
+      requestId: 'req-location',
+      status: RequestStatus.completed,
+    );
+
+    final remaining = store.chatMessagesFor(
+      requestId: 'req-location',
+      currentPubkey: 'owner',
+      participantName: 'Помощник',
+      requestAuthorPubkey: 'owner',
+      activeParticipantPubkey: 'helper',
+    );
+    expect(remaining, hasLength(1));
+    expect(remaining.single.text, 'Подхожу через пять минут');
+  });
+
+
 }
