@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/l10n_ext.dart';
+import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_buttons.dart';
 import '../../geo/domain/geo_privacy.dart';
 
