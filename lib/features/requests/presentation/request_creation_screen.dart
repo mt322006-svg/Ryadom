@@ -9,6 +9,7 @@ import '../../../widgets/ryadom_form_widgets.dart';
 import '../../../widgets/ryadom_surface_card.dart';
 
 import '../domain/help_request.dart';
+import '../domain/request_id.dart';
 
 class RequestCreationScreen extends StatefulWidget {
   const RequestCreationScreen({
@@ -78,7 +79,7 @@ class _RequestCreationScreenState extends State<RequestCreationScreen> {
     }
 
     final request = HelpRequest(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: RequestId.generate(),
       title: title,
       description: description.isEmpty
           ? l10n.requestDefaultDescription
