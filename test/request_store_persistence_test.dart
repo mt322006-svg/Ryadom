@@ -166,4 +166,77 @@ void main() {
   });
 
 
+  test('remote completion purges exact location from in-memory chat', () {
+    const request = HelpRequest(
+      id: 'req-remote-complete',
+      title: 'Нужна помощь',
+      description: 'Тест',
+      compensation: RequestCompensation.free,
+      areaLabel: 'Рядом',
+      timeLabel: 'Сейчас',
+      urgency: RequestUrgency.normal,
+      status: RequestStatus.visible,
+      isOwnRequest: true,
+    );
+
+    final store = LocalNostrRequestStore.testOnly();
+    store.installRequestForTests(
+      request,
+      isOwn: true,
+      authorPubkey: 'owner',
+    );
+
+    store.ingestEventRecord(
+      NostrEventRecord(
+        id: 'chat-location-remote',
+        sequence: 10,
+        event: const NostrEvent(
+          kind: weRyadomChatMessageKind,
+          content: {
+            'request_id': 'req-remote-complete',
+            'message':
+                '{"type":"ryadom.location.v1","latitude":55.1,"longitude":37.2}',
+          },
+          tags: [
+            ['p', 'helper'],
+          ],
+          pubkey: 'owner',
+        ),
+      ),
+      currentPubkey: 'owner',
+    );
+
+    final stateEvent = appRequestEventWithPubkey(
+      WeRyadomNostr.requestStateEvent(
+        updateId: 'remote-complete-1',
+        requestEventId: 'req-event-req-remote-complete',
+        requestId: 'req-remote-complete',
+        status: RequestStatus.completed,
+      ),
+      'owner',
+    );
+
+    store.ingestEventRecord(
+      NostrEventRecord(
+        id: 'remote-complete-1',
+        sequence: 11,
+        event: stateEvent,
+      ),
+      currentPubkey: 'owner',
+    );
+
+    expect(
+      store.chatMessagesFor(
+        requestId: 'req-remote-complete',
+        currentPubkey: 'owner',
+        participantName: 'Помощник',
+        requestAuthorPubkey: 'owner',
+        activeParticipantPubkey: 'helper',
+      ),
+      isEmpty,
+    );
+  });
+
+
+
 }
