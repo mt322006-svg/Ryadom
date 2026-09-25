@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -32,6 +31,7 @@ import '../../trust/domain/trust_guard.dart';
 import 'helper_selection_sheet.dart';
 import 'home_labels.dart';
 import 'home_models.dart';
+import 'nostr_developer_sheet.dart';
 import 'home_bottom_nav.dart';
 import 'home_header_widgets.dart';
 import 'radar_panel.dart';
@@ -373,139 +373,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openNostrSettings() async {
-    final controller = TextEditingController(text: _relayUrl);
-    try {
-      await showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (sheetContext) {
-          return StatefulBuilder(
-            builder: (context, setModalState) {
-              final l10n = context.l10n;
-              final theme = Theme.of(context);
-              final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-              final statusLabel = _loadingNostr
-                  ? l10n.nostrConnectionStatus(NostrConnectionStatus.connecting)
-                  : l10n.nostrConnectionStatus(_nostrStatus);
-
-              void refreshSheet() {
-                if (context.mounted) {
-                  setModalState(() {});
-                }
-              }
-
-              Future<void> reconnect() async {
-                final relay = controller.text.trim();
-                if (relay.isEmpty || _loadingNostr) {
-                  return;
-                }
-
-                setState(() => _loadingNostr = true);
-                refreshSheet();
-
-                final state = await _nostrGateway.reconnect(relay);
-                if (!mounted) {
-                  return;
-                }
-
-                setState(() {
-                  _applyNostrState(state);
-                  _loadingNostr = false;
-                });
-                refreshSheet();
-              }
-
-              return Padding(
-                padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      l10n.nostrSettingsTitle,
-                      style: theme.textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      l10n.nostrSettingsHint,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 12),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        _loadingNostr
-                            ? Icons.sync_rounded
-                            : _nostrStatus == NostrConnectionStatus.online
-                            ? Icons.wifi_tethering_rounded
-                            : Icons.portable_wifi_off_rounded,
-                        color: theme.colorScheme.primary,
-                      ),
-                      title: Text(statusLabel),
-                      subtitle: _nostrError == null
-                          ? Text(_relayUrl)
-                          : Text(_nostrError!),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: controller,
-                      enabled: !_loadingNostr,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                        labelText: 'Relay URL',
-                        hintText: 'wss://nos.lol',
-                      ),
-                    ),
-                    if (_npub != null) ...[
-                      const SizedBox(height: 12),
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(l10n.nostrYourNpub),
-                        subtitle: Text(shortNpub(_npub!)),
-                        trailing: IconButton(
-                          onPressed: () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: _npub!),
-                            );
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(l10n.nostrNpubCopied)),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.copy_rounded),
-                          tooltip: l10n.tooltipCopyNpub,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    RyadomGlassButton(
-                      label: _loadingNostr
-                          ? l10n.nostrConnectionStatus(
-                              NostrConnectionStatus.connecting,
-                            )
-                          : l10n.nostrReconnect,
-                      onPressed: _loadingNostr ? null : reconnect,
-                      expand: true,
-                    ),
-                    const SizedBox(height: 8),
-                    RyadomGlassButton(
-                      label: l10n.later,
-                      onPressed: () => Navigator.of(sheetContext).pop(),
-                      variant: RyadomGlassVariant.secondary,
-                      expand: true,
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => NostrDeveloperSheet(
+        relayUrl: _relayUrl,
+        connectionStatus: _nostrStatus,
+        isLoading: _loadingNostr,
+        errorMessage: _nostrError,
+        npub: _npub,
+        onReconnect: (relay) async {
+          setState(() => _loadingNostr = true);
+          final state = await _nostrGateway.reconnect(relay);
+          if (mounted) {
+            setState(() {
+              _applyNostrState(state);
+              _loadingNostr = false;
+            });
+          }
+          return state;
         },
-      );
-    } finally {
-      controller.dispose();
-    }
+      ),
+    );
   }
 
   Future<void> _refreshRelayInbox() async {
