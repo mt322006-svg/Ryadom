@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../chat/domain/chat_models.dart';
+import '../../chat/domain/shared_location_payload.dart';
 import '../../geo/domain/geo_privacy.dart';
 import '../../requests/domain/help_request.dart';
 import '../../requests/domain/request_responder.dart';
@@ -289,6 +290,12 @@ class LocalNostrRequestStore {
       _appendEvent(id: updateId, event: updateEvent);
     }
 
+    if (status == RequestStatus.completed ||
+        status == RequestStatus.rated ||
+        status == RequestStatus.cancelled) {
+      _purgeExactLocationsForRequest(requestId);
+    }
+
     _schedulePersist();
 
     for (final item in ownRequests) {
@@ -334,6 +341,17 @@ class LocalNostrRequestStore {
           participantName: participantName,
         ),
     ];
+  }
+
+  void _purgeExactLocationsForRequest(String requestId) {
+    _events.removeWhere((record) {
+      if (record.event.kind != weRyadomChatMessageKind ||
+          record.event.content['request_id'] != requestId) {
+        return false;
+      }
+      final raw = record.event.content['message'];
+      return raw is String && SharedLocationPayload.tryParse(raw) != null;
+    });
   }
 
   ChatMessage _chatMessageFromRecord(

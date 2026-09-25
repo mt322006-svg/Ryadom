@@ -32,8 +32,10 @@ import '../../trust/domain/trust_guard.dart';
 import 'helper_selection_sheet.dart';
 import 'home_labels.dart';
 import 'home_models.dart';
+import 'nostr_developer_sheet.dart';
 import 'home_bottom_nav.dart';
 import 'home_header_widgets.dart';
+import 'home_geo_sheets.dart';
 import 'radar_panel.dart';
 
 part 'home_screen_widgets.dart';
@@ -373,139 +375,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openNostrSettings() async {
-    final controller = TextEditingController(text: _relayUrl);
-    try {
-      await showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (sheetContext) {
-          return StatefulBuilder(
-            builder: (context, setModalState) {
-              final l10n = context.l10n;
-              final theme = Theme.of(context);
-              final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-              final statusLabel = _loadingNostr
-                  ? l10n.nostrConnectionStatus(NostrConnectionStatus.connecting)
-                  : l10n.nostrConnectionStatus(_nostrStatus);
-
-              void refreshSheet() {
-                if (context.mounted) {
-                  setModalState(() {});
-                }
-              }
-
-              Future<void> reconnect() async {
-                final relay = controller.text.trim();
-                if (relay.isEmpty || _loadingNostr) {
-                  return;
-                }
-
-                setState(() => _loadingNostr = true);
-                refreshSheet();
-
-                final state = await _nostrGateway.reconnect(relay);
-                if (!mounted) {
-                  return;
-                }
-
-                setState(() {
-                  _applyNostrState(state);
-                  _loadingNostr = false;
-                });
-                refreshSheet();
-              }
-
-              return Padding(
-                padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      l10n.nostrSettingsTitle,
-                      style: theme.textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      l10n.nostrSettingsHint,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 12),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        _loadingNostr
-                            ? Icons.sync_rounded
-                            : _nostrStatus == NostrConnectionStatus.online
-                            ? Icons.wifi_tethering_rounded
-                            : Icons.portable_wifi_off_rounded,
-                        color: theme.colorScheme.primary,
-                      ),
-                      title: Text(statusLabel),
-                      subtitle: _nostrError == null
-                          ? Text(_relayUrl)
-                          : Text(_nostrError!),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: controller,
-                      enabled: !_loadingNostr,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                        labelText: 'Relay URL',
-                        hintText: 'wss://nos.lol',
-                      ),
-                    ),
-                    if (_npub != null) ...[
-                      const SizedBox(height: 12),
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(l10n.nostrYourNpub),
-                        subtitle: Text(shortNpub(_npub!)),
-                        trailing: IconButton(
-                          onPressed: () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: _npub!),
-                            );
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(l10n.nostrNpubCopied)),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.copy_rounded),
-                          tooltip: l10n.tooltipCopyNpub,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    RyadomGlassButton(
-                      label: _loadingNostr
-                          ? l10n.nostrConnectionStatus(
-                              NostrConnectionStatus.connecting,
-                            )
-                          : l10n.nostrReconnect,
-                      onPressed: _loadingNostr ? null : reconnect,
-                      expand: true,
-                    ),
-                    const SizedBox(height: 8),
-                    RyadomGlassButton(
-                      label: l10n.later,
-                      onPressed: () => Navigator.of(sheetContext).pop(),
-                      variant: RyadomGlassVariant.secondary,
-                      expand: true,
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => NostrDeveloperSheet(
+        relayUrl: _relayUrl,
+        connectionStatus: _nostrStatus,
+        isLoading: _loadingNostr,
+        errorMessage: _nostrError,
+        npub: _npub,
+        onReconnect: (relay) async {
+          setState(() => _loadingNostr = true);
+          final state = await _nostrGateway.reconnect(relay);
+          if (mounted) {
+            setState(() {
+              _applyNostrState(state);
+              _loadingNostr = false;
+            });
+          }
+          return state;
         },
-      );
-    } finally {
-      controller.dispose();
-    }
+      ),
+    );
   }
 
   Future<void> _refreshRelayInbox() async {
@@ -694,169 +586,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openGeoSettings() async {
-    await showModalBottomSheet<void>(
+    await showHomeGeoSettingsSheet(
       context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final theme = Theme.of(context);
-            final l10n = context.l10n;
-            final mediaQuery = MediaQuery.of(context);
-            final maxSheetHeight = mediaQuery.size.height * 0.88;
-
-            void refreshSheet() {
-              if (context.mounted) {
-                setModalState(() {});
-              }
-            }
-
-            return SafeArea(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxSheetHeight),
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    4,
-                    16,
-                    20 + mediaQuery.viewInsets.bottom,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        l10n.geoTitle,
-                        style: theme.textTheme.headlineSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _geoDetailsText(l10n),
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 16),
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          _loadingLocation
-                              ? Icons.location_searching_rounded
-                              : _locationEnabled
-                              ? Icons.my_location_rounded
-                              : Icons.location_disabled_outlined,
-                        ),
-                        title: Text(_geoStatusLabel(l10n)),
-                        subtitle: Text(_geoMetaLabel(l10n)),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          RyadomGlassButton.icon(
-                            onPressed: _loadingLocation
-                                ? null
-                                : () => _requestCurrentLocation(
-                                      onChanged: refreshSheet,
-                                    ),
-                            icon: _loadingLocation
-                                ? Icons.hourglass_top_rounded
-                                : Icons.refresh_rounded,
-                            label: _loadingLocation
-                                ? l10n.geoSearching
-                                : _locationEnabled
-                                ? l10n.geoRefresh
-                                : l10n.geoEnable,
-                            compact: true,
-                          ),
-                          RyadomGlassButton.icon(
-                            onPressed: _locationEnabled && !_loadingLocation
-                                ? () {
-                                    _disableLocation(onChanged: refreshSheet);
-                                  }
-                                : null,
-                            icon: Icons.location_off_rounded,
-                            label: l10n.geoDisable,
-                            variant: RyadomGlassVariant.secondary,
-                            compact: true,
-                          ),
-                          RyadomGlassButton.icon(
-                            onPressed: () {
-                              Navigator.of(sheetContext).pop();
-                              _pickRadius();
-                            },
-                            icon: Icons.radar_rounded,
-                            label: l10n.geoRadiusButton(
-                              l10n.formatRadius(_radiusMeters),
-                            ),
-                            variant: RyadomGlassVariant.secondary,
-                            compact: true,
-                          ),
-                        ],
-                      ),
-                      if (_locationEnabled && _currentPosition != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          l10n.geoPublicZone(
-                            GeoPrivacy.approximateAreaLabel(
-                              _currentPosition!.latitude,
-                              _currentPosition!.longitude,
-                            ),
-                          ),
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+      isLoading: () => _loadingLocation,
+      isEnabled: () => _locationEnabled,
+      currentPosition: () => _currentPosition,
+      radiusMeters: () => _radiusMeters,
+      detailsText: _geoDetailsText,
+      statusLabel: _geoStatusLabel,
+      metaLabel: _geoMetaLabel,
+      requestLocation: (onChanged) =>
+          _requestCurrentLocation(onChanged: onChanged),
+      disableLocation: (onChanged) => _disableLocation(onChanged: onChanged),
+      openRadiusPicker: _pickRadius,
     );
   }
 
   Future<void> _pickRadius() async {
-    final selectedRadius = await showModalBottomSheet<int>(
+    final selectedRadius = await showHomeRadiusPicker(
       context: context,
-      showDragHandle: true,
-      builder: (context) {
-        final l10n = context.l10n;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  l10n.radiusPickerTitle,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  l10n.radiusPickerHint,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 16),
-                for (final radius in _radiusOptions)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(l10n.formatRadius(radius)),
-                    trailing: radius == _radiusMeters
-                        ? const Icon(Icons.check_rounded)
-                        : null,
-                    onTap: () => Navigator.of(context).pop(radius),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
+      radiusOptions: _radiusOptions,
+      selectedRadius: _radiusMeters,
     );
 
-    if (selectedRadius != null) {
+    if (selectedRadius != null && mounted) {
       setState(() => _radiusMeters = selectedRadius);
     }
   }

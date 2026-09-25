@@ -1,5 +1,15 @@
 # Session Log
 
+## 2026-09-25
+
+- Continued phase-2 hardening from current `main`.
+- Extracted Nostr developer settings and geo/radius sheets from `HomeScreen`.
+- Exact shared locations are now purged from in-memory chat when a request is completed, rated or cancelled.
+- Added a regression test for exact-location purge.
+- Replaced clock-based request IDs with 128-bit `Random.secure` IDs and added uniqueness/format coverage.
+- Updated privacy documentation to match the shorter lifetime of exact-location data.
+- Opened draft PR #4 for CI validation before merge.
+
 ## 2026-09-24
 
 - Integrated the private exact-location sharing work onto the hardening branch.
