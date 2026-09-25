@@ -188,6 +188,11 @@ class LocalNostrRequestStore {
           helperPubkey.isNotEmpty) {
         _chosenHelperByRequestId[stateRequestId] = helperPubkey;
       }
+
+      final status = WeRyadomNostr.statusFromEvent(sanitizedRecord.event);
+      if (stateRequestId.isNotEmpty && _isTerminalStatus(status)) {
+        _purgeExactLocationsForRequest(stateRequestId);
+      }
     }
 
     _schedulePersist();
@@ -341,6 +346,12 @@ class LocalNostrRequestStore {
           participantName: participantName,
         ),
     ];
+  }
+
+  bool _isTerminalStatus(RequestStatus status) {
+    return status == RequestStatus.completed ||
+        status == RequestStatus.rated ||
+        status == RequestStatus.cancelled;
   }
 
   void _purgeExactLocationsForRequest(String requestId) {
