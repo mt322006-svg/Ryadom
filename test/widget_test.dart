@@ -47,14 +47,14 @@ void main() {
     expect(find.text('Мы Рядом'), findsWidgets);
     expect(find.text('Помощь рядом'), findsOneWidget);
     expect(find.text('Радар'), findsWidgets);
-    expect(find.byTooltip('Нужна помощь'), findsOneWidget);
+    expect(find.text('Нужна помощь'), findsWidgets);
   });
 
   testWidgets('opens request creation flow', (WidgetTester tester) async {
     await tester.pumpWidget(_buildTestApp());
     await _pumpUi(tester);
 
-    await tester.tap(find.byTooltip('Нужна помощь'));
+    await tester.tap(find.text('Нужна помощь').first);
     await _pumpUi(tester);
 
     expect(
@@ -70,7 +70,7 @@ void main() {
     await tester.pumpWidget(_buildTestApp());
     await _pumpUi(tester);
 
-    await tester.tap(find.byTooltip('Нужна помощь'));
+    await tester.tap(find.text('Нужна помощь').first);
     await _pumpUi(tester);
 
     await tester.enterText(
@@ -177,11 +177,13 @@ void main() {
     expect(find.text('Без предоплаты'), findsOneWidget);
   });
 
-  testWidgets('opens settings from header', (WidgetTester tester) async {
+  testWidgets('opens settings from profile', (WidgetTester tester) async {
     await tester.pumpWidget(_buildTestApp());
     await _pumpUi(tester);
 
-    await tester.tap(find.byTooltip('Настройки'));
+    await tester.tap(find.byIcon(Icons.person_rounded));
+    await _pumpUi(tester);
+    await tester.tap(find.text('Настройки'));
     await _pumpUi(tester);
 
     expect(find.text('Оформление'), findsOneWidget);
