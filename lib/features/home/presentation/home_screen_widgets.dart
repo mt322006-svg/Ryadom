@@ -524,6 +524,74 @@ class _SafetyNoteCard extends StatelessWidget {
   }
 }
 
+class _GeoOffCard extends StatelessWidget {
+  const _GeoOffCard({
+    required this.onEnable,
+    required this.onOpenSettings,
+  });
+
+  final VoidCallback onEnable;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = context.l10n;
+
+    return RyadomSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.location_disabled_outlined,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  l10n.geoDisabled,
+                  style: theme.textTheme.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            l10n.geoMetaOptional,
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: onEnable,
+                icon: const Icon(Icons.my_location_rounded),
+                label: Text(l10n.geoEnable),
+              ),
+              TextButton(
+                onPressed: onOpenSettings,
+                child: Text(l10n.geoTitle),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EmptyActivityCard extends StatelessWidget {
   const _EmptyActivityCard({
     required this.filter,

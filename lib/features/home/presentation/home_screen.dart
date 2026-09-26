@@ -1286,8 +1286,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
         HomeRadarHeader(
-          onCreateRequest: _openRequestCreation,
-          onOpenSettings: _openSettings,
           onOpenGeoSettings: _openGeoSettings,
           onPickRadius: _pickRadius,
           isLocationEnabled: _locationEnabled,
@@ -1296,43 +1294,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           radiusLabel: l10n.formatRadius(_radiusMeters),
         ),
         const SizedBox(height: 16),
-        RadarFilterBar(
-          selectedFilter:
-              _selectedFilter == RadarFilter.people ||
-                  _selectedFilter == RadarFilter.signals
-              ? RadarFilter.all
-              : _selectedFilter,
-          onSelected: (filter) {
-            setState(() => _selectedFilter = filter);
-          },
-        ),
-        const SizedBox(height: 16),
-        RadarPanel(
-          requests: visibleRequests,
-          filter: _selectedFilter,
-          onRequestTap: _openRequestDetails,
-          radiusLabel: l10n.formatRadius(_radiusMeters),
-          radiusMeters: _radiusMeters,
-          distanceForRequest: _distanceForRequest,
-          userLatitude: _locationEnabled ? _currentPosition?.latitude : null,
-          userLongitude: _locationEnabled ? _currentPosition?.longitude : null,
-        ),
-        const SizedBox(height: 16),
         RyadomGlassButton.icon(
           onPressed: _openRequestCreation,
           icon: Icons.add_rounded,
           label: l10n.needHelpTitle,
           expand: true,
         ),
+        if (!_locationEnabled) ...[
+          const SizedBox(height: 12),
+          _GeoOffCard(
+            onEnable: () => _requestCurrentLocation(),
+            onOpenSettings: _openGeoSettings,
+          ),
+        ],
+        const SizedBox(height: 16),
+        RadarPanel(
+          requests: visibleRequests,
+          onRequestTap: _openRequestDetails,
+          radiusMeters: _radiusMeters,
+          distanceForRequest: _distanceForRequest,
+          userLatitude: _locationEnabled ? _currentPosition?.latitude : null,
+          userLongitude: _locationEnabled ? _currentPosition?.longitude : null,
+        ),
         const SizedBox(height: 20),
         _SectionTitle(
           title: l10n.activityNearby,
-          actionLabel: _selectedFilter == RadarFilter.requests
-              ? l10n.filterShowRequests
-              : l10n.filterShowAll,
-          onActionTap: _selectedFilter == RadarFilter.requests
-              ? () => setState(() => _selectedFilter = RadarFilter.all)
-              : null,
+          actionLabel: '${visibleRequests.length}',
         ),
         const SizedBox(height: 12),
         if (visibleRequests.isEmpty)

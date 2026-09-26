@@ -8,15 +8,12 @@ import '../../requests/domain/help_request.dart';
 import '../../../theme/ryadom_palette.dart';
 import '../domain/radar_layout.dart';
 import 'home_labels.dart';
-import 'home_models.dart';
 
 class RadarPanel extends StatefulWidget {
   const RadarPanel({
     super.key,
     required this.requests,
-    required this.filter,
     required this.onRequestTap,
-    required this.radiusLabel,
     required this.radiusMeters,
     required this.distanceForRequest,
     this.userLatitude,
@@ -24,9 +21,7 @@ class RadarPanel extends StatefulWidget {
   });
 
   final List<HelpRequest> requests;
-  final RadarFilter filter;
   final ValueChanged<HelpRequest> onRequestTap;
-  final String radiusLabel;
   final int radiusMeters;
   final double? Function(HelpRequest request) distanceForRequest;
   final double? userLatitude;
@@ -106,22 +101,11 @@ class _RadarPanelState extends State<RadarPanel>
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
             child: Column(
               children: [
-                Row(
-                  children: [
-                    Text(
-                      l10n.radarTitle,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        color: Colors.white,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      l10n.radarRadius(widget.radiusLabel),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: ryadom.muted,
-                      ),
-                    ),
-                  ],
+                Text(
+                  l10n.radarTitle,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(height: 14),
                 AspectRatio(
@@ -139,11 +123,7 @@ class _RadarPanelState extends State<RadarPanel>
                         showLabels: showLabels,
                       );
 
-                      final zoneLabels = [
-                        for (final meters
-                            in RadarZones.ringEdgeMeters(widget.radiusMeters))
-                          l10n.formatDistance(meters),
-                      ];
+                      const zoneLabels = <String>[];
 
                       return Stack(
                         clipBehavior: Clip.none,
@@ -215,42 +195,19 @@ class _RadarPanelState extends State<RadarPanel>
                   ),
                 ),
                 const SizedBox(height: 14),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 8,
-                      children: [
-                        _LegendDot(
-                          color: ryadom.accent,
-                          label: markers.length > 1
-                              ? l10n.radarLegendMulti
-                              : l10n.radarLegendSingle,
-                        ),
-                        _LegendDot(
-                          color: ryadom.urgent,
-                          label: l10n.radarLegendUrgent,
-                        ),
-                        _LegendDot(
-                          color: ryadom.radarGlow,
-                          label: l10n.radarLegendZones,
-                        ),
-                      ],
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.requests.isEmpty
+                        ? l10n.radarNearbySummaryEmpty
+                        : l10n.radarNearbySummary(
+                            widget.requests.length,
+                            totalResponses(widget.requests),
+                          ),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: ryadom.muted,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.requests.isEmpty
-                          ? l10n.radarNearbySummaryEmpty
-                          : l10n.radarNearbySummary(
-                              widget.requests.length,
-                              totalResponses(widget.requests),
-                            ),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: ryadom.muted,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ],
             ),
@@ -594,36 +551,6 @@ class _CenterDot extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _LegendDot extends StatelessWidget {
-  const _LegendDot({required this.color, required this.label});
-
-  final Color color;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 9,
-          height: 9,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(
-            color: Theme.of(context).extension<RyadomColors>()?.muted,
-          ),
-        ),
-      ],
     );
   }
 }
