@@ -4,12 +4,10 @@ class _SectionTitle extends StatelessWidget {
   const _SectionTitle({
     required this.title,
     required this.actionLabel,
-    this.onActionTap,
   });
 
   final String title;
   final String actionLabel;
-  final VoidCallback? onActionTap;
 
   @override
   Widget build(BuildContext context) {
@@ -30,19 +28,7 @@ class _SectionTitle extends StatelessWidget {
       children: [
         Expanded(child: Text(title, style: theme.textTheme.headlineSmall)),
         const SizedBox(width: 12),
-        Flexible(
-          child: onActionTap == null
-              ? action
-              : TextButton(
-                  onPressed: onActionTap,
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: action,
-                ),
-        ),
+        Flexible(child: action),
       ],
     );
   }
