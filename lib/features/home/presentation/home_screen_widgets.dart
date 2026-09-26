@@ -4,12 +4,10 @@ class _SectionTitle extends StatelessWidget {
   const _SectionTitle({
     required this.title,
     required this.actionLabel,
-    this.onActionTap,
   });
 
   final String title;
   final String actionLabel;
-  final VoidCallback? onActionTap;
 
   @override
   Widget build(BuildContext context) {
@@ -30,19 +28,7 @@ class _SectionTitle extends StatelessWidget {
       children: [
         Expanded(child: Text(title, style: theme.textTheme.headlineSmall)),
         const SizedBox(width: 12),
-        Flexible(
-          child: onActionTap == null
-              ? action
-              : TextButton(
-                  onPressed: onActionTap,
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: action,
-                ),
-        ),
+        Flexible(child: action),
       ],
     );
   }
@@ -519,6 +505,74 @@ class _SafetyNoteCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _GeoOffCard extends StatelessWidget {
+  const _GeoOffCard({
+    required this.onEnable,
+    required this.onOpenSettings,
+  });
+
+  final VoidCallback onEnable;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = context.l10n;
+
+    return RyadomSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.location_disabled_outlined,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  l10n.geoDisabled,
+                  style: theme.textTheme.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            l10n.geoMetaOptional,
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: onEnable,
+                icon: const Icon(Icons.my_location_rounded),
+                label: Text(l10n.geoEnable),
+              ),
+              TextButton(
+                onPressed: onOpenSettings,
+                child: Text(l10n.geoTitle),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

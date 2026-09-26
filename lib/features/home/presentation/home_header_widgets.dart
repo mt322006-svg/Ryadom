@@ -3,13 +3,9 @@ import 'package:flutter/material.dart';
 import '../../../l10n/l10n_ext.dart';
 import '../../../l10n/ryadom_l10n_helpers.dart';
 import '../../../theme/ryadom_buttons.dart';
-import 'home_models.dart';
-
 class HomeRadarHeader extends StatelessWidget {
   const HomeRadarHeader({
     super.key,
-    required this.onCreateRequest,
-    required this.onOpenSettings,
     required this.onOpenGeoSettings,
     required this.onPickRadius,
     required this.isLocationEnabled,
@@ -18,8 +14,6 @@ class HomeRadarHeader extends StatelessWidget {
     required this.radiusLabel,
   });
 
-  final VoidCallback onCreateRequest;
-  final VoidCallback onOpenSettings;
   final VoidCallback onOpenGeoSettings;
   final VoidCallback onPickRadius;
   final bool isLocationEnabled;
@@ -72,16 +66,6 @@ class HomeRadarHeader extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-            IconButton(
-              onPressed: onOpenSettings,
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: l10n.tooltipSettings,
-            ),
-            IconButton(
-              onPressed: onCreateRequest,
-              icon: const Icon(Icons.campaign_rounded),
-              tooltip: l10n.tooltipNeedHelp,
             ),
           ],
         ),
@@ -172,38 +156,3 @@ class HomeHeaderPill extends StatelessWidget {
     );
   }
 }
-
-class RadarFilterBar extends StatelessWidget {
-  const RadarFilterBar({
-    super.key,
-    required this.selectedFilter,
-    required this.onSelected,
-  });
-
-  final RadarFilter selectedFilter;
-  final ValueChanged<RadarFilter> onSelected;
-
-  /// Only filters that currently have content (people/signals are not live yet).
-  static const visibleFilters = [RadarFilter.all, RadarFilter.requests];
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = context.l10n;
-
-    return Row(
-      children: [
-        for (var i = 0; i < visibleFilters.length; i++) ...[
-          if (i > 0) const SizedBox(width: 8),
-          Expanded(
-            child: RyadomSegmentChip(
-              label: l10n.radarFilterLabel(visibleFilters[i]),
-              selected: visibleFilters[i] == selectedFilter,
-              onTap: () => onSelected(visibleFilters[i]),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
